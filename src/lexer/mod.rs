@@ -1,7 +1,5 @@
 use std::{collections::HashMap, str::from_utf8};
 
-mod token;
-
 pub struct Lexer<'a> {
     input: &'a [u8],
     current_char: u8,
