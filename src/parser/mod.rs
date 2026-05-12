@@ -9,6 +9,8 @@ pub enum Expr {
     PostfixUnary(Box<Expr>, UnaryOp),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
     Ident(Symbol),
+    FunctionCall(Box<Expr>, Vec<Expr>), // function name, args
+    FieldAccess(Box<Expr>, Symbol),
 }
 
 #[derive(Debug, PartialEq)]
@@ -28,7 +30,7 @@ pub enum BinaryOp {
     And,
     BitwiseOr,
     BitwiseAnd,
-    Pow,
+    BitwiseXor,
     Eq,
     NotEq,
     LessThen,
@@ -41,6 +43,15 @@ pub enum BinaryOp {
     Sub,
     Mul,
     Div,
+    Modulo,
+    AddAssign,
+    SubAssign,
+    MulAssign,
+    DivAssign,
+    BitwiseOrAssign,
+    BitwiseAndAssign,
+    ModuloAssign,
+    BitwiseXorAssign,
 }
 
 #[derive(Debug, PartialEq)]
@@ -61,7 +72,7 @@ impl BinaryOp {
             TokenType::TokenDoublePipe => Some(BinaryOp::Or),
             TokenType::TokenDoubleAmpersand => Some(BinaryOp::And),
             TokenType::TokenPipe => Some(BinaryOp::BitwiseOr),
-            TokenType::TokenCarret => Some(BinaryOp::Pow),
+            TokenType::TokenCarret => Some(BinaryOp::BitwiseXor),
             TokenType::TokenAmpersand => Some(BinaryOp::BitwiseAnd),
             TokenType::TokenEqual => Some(BinaryOp::Eq),
             TokenType::TokenBangEqual => Some(BinaryOp::NotEq),
@@ -75,6 +86,15 @@ impl BinaryOp {
             TokenType::TokenMinus => Some(BinaryOp::Sub),
             TokenType::TokenAsterisk => Some(BinaryOp::Mul),
             TokenType::TokenSlash => Some(BinaryOp::Div),
+            TokenType::TokenModulo => Some(BinaryOp::Modulo),
+            TokenType::TokenPlusAssign => Some(BinaryOp::AddAssign),
+            TokenType::TokenMinusAssign => Some(BinaryOp::SubAssign),
+            TokenType::TokenAsteriskAssign => Some(BinaryOp::MulAssign),
+            TokenType::TokenSlashAssign => Some(BinaryOp::DivAssign),
+            TokenType::TokenCarretAssign => Some(BinaryOp::BitwiseXorAssign),
+            TokenType::TokenModuloAssign => Some(BinaryOp::ModuloAssign),
+            TokenType::TokenAmpersandAssign => Some(BinaryOp::BitwiseAndAssign),
+            TokenType::TokenPipeAssign => Some(BinaryOp::BitwiseOrAssign),
             _ => None,
         }
     }
@@ -327,6 +347,50 @@ impl<'a> Parser<'a> {
                 );
             }
 
+            // function call
+            if tok.kind == TokenType::TokenOpenParen {
+                let bp = self.binding_power(tok).0;
+                if bp < min_bp {
+                    break;
+                }
+                self.advance();
+
+                let mut args = vec![];
+                while self.current_token().kind != TokenType::TokenCloseParen {
+                    args.push(self.parse_expression(0));
+                    while self.current_token().kind == TokenType::TokenComma {
+                        self.advance();
+                        args.push(self.parse_expression(0));
+                    }
+                }
+
+                if self.current_token().kind != TokenType::TokenCloseParen {
+                    panic!("Expected ')'"); // TODO: proper error handling
+                }
+                self.advance();
+
+                left = Expr::FunctionCall(Box::new(left), args);
+                continue;
+            }
+
+            // field access
+            if tok.kind == TokenType::TokenDot || tok.kind == TokenType::TokenArrow {
+                let bp = self.binding_power(tok).0;
+                if bp < min_bp {
+                    break;
+                }
+                self.advance(); // operator
+
+                let field = match &self.current_token().kind {
+                    TokenType::TokenIdentifier(sym) => *sym,
+                    _ => panic!("Expected field name after '.'"),
+                };
+                self.advance(); // identifier
+                left = Expr::FieldAccess(Box::new(left), field);
+
+                continue;
+            }
+
             // infix
             let (bp, right_assoc) = {
                 if !tok.is_operator() {
@@ -360,6 +424,14 @@ impl<'a> Parser<'a> {
 
     fn binding_power(&self, tok: &Token) -> (u8, bool) {
         match tok.kind {
+            TokenType::TokenPlusAssign => (1, true),
+            TokenType::TokenMinusAssign => (1, true),
+            TokenType::TokenAsteriskAssign => (1, true),
+            TokenType::TokenSlashAssign => (1, true),
+            TokenType::TokenCarretAssign => (1, true),
+            TokenType::TokenModuloAssign => (1, true),
+            TokenType::TokenAmpersandAssign => (1, true),
+            TokenType::TokenPipeAssign => (1, true),
             TokenType::TokenAssign => (1, true),
             TokenType::TokenQuestion => (4, false),
             TokenType::TokenDoublePipe => (5, false),
@@ -379,6 +451,10 @@ impl<'a> Parser<'a> {
             TokenType::TokenMinus => (50, false),
             TokenType::TokenAsterisk => (60, false),
             TokenType::TokenSlash => (60, false),
+            TokenType::TokenModulo => (60, false),
+            TokenType::TokenOpenParen => (100, false),
+            TokenType::TokenDot => (110, false),
+            TokenType::TokenArrow => (110, false),
 
             _ => (0, false),
         }
@@ -398,6 +474,7 @@ impl Token {
             || self.kind == TokenType::TokenBangEqual
             || self.kind == TokenType::TokenOpenTag
             || self.kind == TokenType::TokenCloseTag
+            || self.kind == TokenType::TokenModulo
             || self.kind == TokenType::TokenBifShiftRight
             || self.kind == TokenType::TokenBifShiftLeft
             || self.kind == TokenType::TokenIncrement
@@ -408,6 +485,17 @@ impl Token {
             || self.kind == TokenType::TokenDoublePipe
             || self.kind == TokenType::TokenLessEqual
             || self.kind == TokenType::TokenGreaterEqual
+            || self.kind == TokenType::TokenOpenParen
+            || self.kind == TokenType::TokenDot
+            || self.kind == TokenType::TokenArrow
+            || self.kind == TokenType::TokenPlusAssign
+            || self.kind == TokenType::TokenMinusAssign
+            || self.kind == TokenType::TokenAsteriskAssign
+            || self.kind == TokenType::TokenSlashAssign
+            || self.kind == TokenType::TokenCarretAssign
+            || self.kind == TokenType::TokenModuloAssign
+            || self.kind == TokenType::TokenAmpersandAssign
+            || self.kind == TokenType::TokenPipeAssign
     }
 }
 
@@ -832,6 +920,91 @@ mod test {
             BinaryOp::Add,
             Box::new(Expr::Int(1)),
         )));
+
+        assert_eq!(ast, expected_expression);
+    }
+
+    #[test]
+    fn test_function_call() {
+        let mut interner = Interner::new();
+        let input = "bar = foo(1,2)";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_expression(0);
+
+        let expected_expression = Expr::Binary(
+            Box::new(Expr::Ident(Symbol(0))),
+            BinaryOp::Assign,
+            Box::new(Expr::FunctionCall(
+                Box::new(Expr::Ident(Symbol(1))),
+                vec![Expr::Int(1), Expr::Int(2)],
+            )),
+        );
+
+        assert_eq!(ast, expected_expression);
+    }
+
+    #[test]
+    fn test_field_access_1() {
+        let mut interner = Interner::new();
+        let input = "foo.bar = 1";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_expression(0);
+
+        let expected_expression = Expr::Binary(
+            Box::new(Expr::FieldAccess(
+                Box::new(Expr::Ident(Symbol(0))),
+                Symbol(1),
+            )),
+            BinaryOp::Assign,
+            Box::new(Expr::Int(1)),
+        );
+
+        assert_eq!(ast, expected_expression);
+    }
+
+    #[test]
+    fn test_field_access_2() {
+        let mut interner = Interner::new();
+        let input = "foo->bar = 1";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_expression(0);
+
+        let expected_expression = Expr::Binary(
+            Box::new(Expr::FieldAccess(
+                Box::new(Expr::Ident(Symbol(0))),
+                Symbol(1),
+            )),
+            BinaryOp::Assign,
+            Box::new(Expr::Int(1)),
+        );
+
+        assert_eq!(ast, expected_expression);
+    }
+
+    #[test]
+    fn test_compound_assignment() {
+        let mut interner = Interner::new();
+        let input = "foo*=2%2";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_expression(0);
+
+        let expected_expression = Expr::Binary(
+            Box::new(Expr::Ident(Symbol(0))),
+            BinaryOp::MulAssign,
+            Box::new(Expr::Binary(
+                Box::new(Expr::Int(2)),
+                BinaryOp::Modulo,
+                Box::new(Expr::Int(2)),
+            )),
+        );
 
         assert_eq!(ast, expected_expression);
     }

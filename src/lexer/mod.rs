@@ -53,6 +53,70 @@ impl<'a> Lexer<'a> {
         let start = self.position;
         match self.current_char {
             // Two characters
+            b'-' if self.input.get(self.read_position) == Some(&b'=') => {
+                self.read_char();
+                self.read_char();
+                Token {
+                    kind: TokenType::TokenMinusAssign,
+                    span: Span::new(start, self.position),
+                }
+            }
+            b'+' if self.input.get(self.read_position) == Some(&b'=') => {
+                self.read_char();
+                self.read_char();
+                Token {
+                    kind: TokenType::TokenPlusAssign,
+                    span: Span::new(start, self.position),
+                }
+            }
+            b'*' if self.input.get(self.read_position) == Some(&b'=') => {
+                self.read_char();
+                self.read_char();
+                Token {
+                    kind: TokenType::TokenAsteriskAssign,
+                    span: Span::new(start, self.position),
+                }
+            }
+            b'/' if self.input.get(self.read_position) == Some(&b'=') => {
+                self.read_char();
+                self.read_char();
+                Token {
+                    kind: TokenType::TokenSlashAssign,
+                    span: Span::new(start, self.position),
+                }
+            }
+            b'&' if self.input.get(self.read_position) == Some(&b'=') => {
+                self.read_char();
+                self.read_char();
+                Token {
+                    kind: TokenType::TokenAmpersandAssign,
+                    span: Span::new(start, self.position),
+                }
+            }
+            b'|' if self.input.get(self.read_position) == Some(&b'=') => {
+                self.read_char();
+                self.read_char();
+                Token {
+                    kind: TokenType::TokenPipeAssign,
+                    span: Span::new(start, self.position),
+                }
+            }
+            b'%' if self.input.get(self.read_position) == Some(&b'=') => {
+                self.read_char();
+                self.read_char();
+                Token {
+                    kind: TokenType::TokenModuloAssign,
+                    span: Span::new(start, self.position),
+                }
+            }
+            b'^' if self.input.get(self.read_position) == Some(&b'=') => {
+                self.read_char();
+                self.read_char();
+                Token {
+                    kind: TokenType::TokenCarretAssign,
+                    span: Span::new(start, self.position),
+                }
+            }
             b'-' if self.input.get(self.read_position) == Some(&b'-') => {
                 self.read_char();
                 self.read_char();
@@ -73,7 +137,7 @@ impl<'a> Lexer<'a> {
                 self.read_char();
                 self.read_char();
                 Token {
-                    kind: TokenType::TokenMethodBindOperator,
+                    kind: TokenType::TokenArrow,
                     span: Span::new(start, self.position),
                 }
             }
@@ -311,6 +375,13 @@ impl<'a> Lexer<'a> {
                     span: Span::new(start, self.position),
                 }
             }
+            b'%' => {
+                self.read_char();
+                Token {
+                    kind: TokenType::TokenModulo,
+                    span: Span::new(start, self.position),
+                }
+            }
 
             b'"' => self.read_string(),
 
@@ -339,7 +410,6 @@ impl<'a> Lexer<'a> {
 
         let bytes = &self.input[start..self.position];
 
-        // WARN: check for "else if"
         let kind = match bytes {
             // Std C keywords
             b"if" => TokenType::TokenIf,
@@ -682,6 +752,8 @@ pub enum TokenType {
     TokenTilde,
     // ?
     TokenQuestion,
+    // %
+    TokenModulo,
 
     // Two Characters
     // ==
@@ -693,7 +765,7 @@ pub enum TokenType {
     // <=
     TokenLessEqual,
     // ->
-    TokenMethodBindOperator,
+    TokenArrow,
     // &&
     TokenDoubleAmpersand,
     // ||
@@ -706,6 +778,22 @@ pub enum TokenType {
     TokenDecrement,
     // ++
     TokenIncrement,
+    // -=
+    TokenMinusAssign,
+    // +=
+    TokenPlusAssign,
+    // *=
+    TokenAsteriskAssign,
+    // /=
+    TokenSlashAssign,
+    // |=
+    TokenPipeAssign,
+    // &=
+    TokenAmpersandAssign,
+    // ^=
+    TokenCarretAssign,
+    // %=
+    TokenModuloAssign,
 
     #[default]
     TokenEOF,
@@ -794,14 +882,14 @@ mod test {
             TokenType::TokenOpenParen,
             TokenType::TokenIdentifier(Symbol(10)),
             TokenType::TokenCloseParen,
-            TokenType::TokenMethodBindOperator,
+            TokenType::TokenArrow,
             TokenType::TokenIdentifier(Symbol(10)),
             TokenType::TokenPipe,
             TokenType::TokenIdentifier(Symbol(11)),
             TokenType::TokenOpenParen,
             TokenType::TokenIdentifier(Symbol(12)),
             TokenType::TokenCloseParen,
-            TokenType::TokenMethodBindOperator,
+            TokenType::TokenArrow,
             TokenType::TokenIdentifier(Symbol(13)),
             TokenType::TokenOpenParen,
             TokenType::TokenStringConstant(Symbol(14)),
@@ -835,7 +923,7 @@ mod test {
             TokenType::TokenIdentifier(Symbol(8)),
             TokenType::TokenOpenParen,
             TokenType::TokenCloseParen,
-            TokenType::TokenMethodBindOperator,
+            TokenType::TokenArrow,
             TokenType::TokenStatic,
             TokenType::TokenIdentifier(Symbol(4)),
             TokenType::TokenOpenBrace,
@@ -858,7 +946,7 @@ mod test {
             TokenType::TokenIdentifier(Symbol(17)),
             TokenType::TokenOpenParen,
             TokenType::TokenCloseParen,
-            TokenType::TokenMethodBindOperator,
+            TokenType::TokenArrow,
             TokenType::TokenIdentifier(Symbol(4)),
             TokenType::TokenOpenBrace,
             TokenType::TokenIf,
@@ -902,7 +990,7 @@ mod test {
             TokenType::TokenIdentifier(Symbol(28)),
             TokenType::TokenOpenParen,
             TokenType::TokenCloseParen,
-            TokenType::TokenMethodBindOperator,
+            TokenType::TokenArrow,
             TokenType::TokenConst,
             TokenType::TokenIdentifier(Symbol(4)),
             TokenType::TokenOpenBrace,
