@@ -11,6 +11,7 @@ pub enum Expr {
     Ident(Symbol),
     FunctionCall(Box<Expr>, Vec<Expr>), // function name, args
     FieldAccess(Box<Expr>, Symbol),
+    ArraySub(Box<Expr>, Box<Expr>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -388,6 +389,29 @@ impl<'a> Parser<'a> {
                 self.advance(); // identifier
                 left = Expr::FieldAccess(Box::new(left), field);
 
+                continue;
+            }
+
+            // array subscript
+            if tok.kind == TokenType::TokenOpenSquare {
+                let bp = self.binding_power(tok).0;
+                if bp < min_bp {
+                    break;
+                }
+                self.advance();
+
+                if self.current_token().kind == TokenType::TokenCloseSquare {
+                    panic!("Empty subscript")
+                }
+
+                let sub = self.parse_expression(0); // inside of []
+
+                if self.current_token().kind != TokenType::TokenCloseSquare {
+                    panic!("Expected ']'"); // TODO: proper error handling
+                }
+                self.advance();
+
+                left = Expr::ArraySub(Box::new(left), Box::new(sub));
                 continue;
             }
 
@@ -1007,5 +1031,41 @@ mod test {
         );
 
         assert_eq!(ast, expected_expression);
+    }
+
+    #[test]
+    fn test_array_sub() {
+        let mut interner = Interner::new();
+        let input = "foo[1*2+1]";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_expression(0);
+
+        let expected_expression = Expr::ArraySub(
+            Box::new(Expr::Ident(Symbol(0))),
+            Box::new(Expr::Binary(
+                Box::new(Expr::Binary(
+                    Box::new(Expr::Int(1)),
+                    BinaryOp::Mul,
+                    Box::new(Expr::Int(2)),
+                )),
+                BinaryOp::Add,
+                Box::new(Expr::Int(1)),
+            )),
+        );
+
+        assert_eq!(ast, expected_expression);
+    }
+
+    #[test]
+    #[should_panic(expected = "Empty subscript")]
+    fn test_array_sub_empty_expression() {
+        let mut interner = Interner::new();
+        let input = "bar = foo[]";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let _ast = parser.parse_expression(0);
     }
 }
