@@ -65,6 +65,8 @@ pub enum UnaryOp {
     PreIncrement,
     PostDecrement,
     PostIncrement,
+    AddressOf,
+    Dereference,
 }
 
 impl BinaryOp {
@@ -112,14 +114,14 @@ pub enum Type {
     U32,
     U16,
     U8,
-    Usize, //TODO:
+    Usize,
     F64,
     F32,
-    String, //TODO:
+    String,
     Bool,
     Char,
     DynArr,
-    FixArray, //TODO:
+    FixArray(Box<Type>),
     Hashmap,
     Variant,
     Struct,
@@ -140,6 +142,7 @@ impl Type {
             TokenType::TokenU8 => Some(Type::U8),
             TokenType::TokenF64 => Some(Type::F64),
             TokenType::TokenF32 => Some(Type::F32),
+            TokenType::TokenUsize => Some(Type::Usize),
             TokenType::TokenBoolean => Some(Type::Bool),
             TokenType::TokenVariant => Some(Type::Variant),
             TokenType::TokenMaybe => Some(Type::Maybe),
@@ -148,6 +151,7 @@ impl Type {
             TokenType::TokenHashmap => Some(Type::Hashmap),
             TokenType::TokenChar => Some(Type::Char),
             TokenType::TokenStruct => Some(Type::Struct),
+            TokenType::TokenString => Some(Type::String),
             _ => None,
         }
     }
@@ -206,10 +210,25 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_declaration(&mut self) -> Option<Statement> {
-        let type_token = self.current_token();
-        let var_type = Type::from_token(type_token).expect("Expected type"); // TODO: proper error handling
+    fn parse_type(&mut self) -> Type {
+        let base = Type::from_token(self.current_token()).expect("Expected type");
         self.advance();
+
+        // FixArray check
+        if self.current_token().kind == TokenType::TokenOpenSquare {
+            self.advance(); // [
+            if self.current_token().kind != TokenType::TokenCloseSquare {
+                panic!("Expected ']' in array type");
+            }
+            self.advance(); // ]
+            return Type::FixArray(Box::new(base));
+        }
+
+        base
+    }
+
+    fn parse_declaration(&mut self) -> Option<Statement> {
+        let var_type = self.parse_type();
 
         let variable = match &self.current_token().kind {
             TokenType::TokenIdentifier(sym) => *sym,
@@ -393,6 +412,16 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let right = self.parse_expression(70);
                 Expr::PrefixUnary(UnaryOp::BitwiseNot, Box::new(right))
+            }
+            TokenType::TokenAmpersand => {
+                self.advance();
+                let right = self.parse_expression(70);
+                Expr::PrefixUnary(UnaryOp::AddressOf, Box::new(right))
+            }
+            TokenType::TokenAsterisk => {
+                self.advance();
+                let right = self.parse_expression(70);
+                Expr::PrefixUnary(UnaryOp::Dereference, Box::new(right))
             }
             _ => self.parse_primary().expect("expected expression"), // TODO: proper error printing
         };
@@ -629,6 +658,8 @@ impl Token {
             || self.kind == TokenType::TokenHashmap
             || self.kind == TokenType::TokenChar
             || self.kind == TokenType::TokenStruct
+            || self.kind == TokenType::TokenString
+            || self.kind == TokenType::TokenUsize
     }
 }
 
@@ -702,6 +733,30 @@ mod test {
             Box::new(Expr::PrefixUnary(
                 UnaryOp::PreDecrement,
                 Box::new(Expr::Int(2)),
+            )),
+        );
+
+        assert_eq!(ast, expected_expression);
+    }
+
+    #[test]
+    fn test_prefix_3() {
+        let mut interner = Interner::new();
+        let input = "&foo + *bar";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_expression(0);
+
+        let expected_expression = Expr::Binary(
+            Box::new(Expr::PrefixUnary(
+                UnaryOp::AddressOf,
+                Box::new(Expr::Ident(Symbol(0))),
+            )),
+            BinaryOp::Add,
+            Box::new(Expr::PrefixUnary(
+                UnaryOp::Dereference,
+                Box::new(Expr::Ident(Symbol(1))),
             )),
         );
 
@@ -1265,5 +1320,28 @@ mod test {
         let mut parser = Parser::init_parser(&mut lexer);
 
         let _ast = parser.parse_statement();
+    }
+
+    #[test]
+    fn test_declaration_fixed_array() {
+        let mut interner = Interner::new();
+        // WARN: change the expression of this test case after adding parser for array initialization
+        let input = "i64[] bar = 132+123;";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::Declaration(
+            Type::FixArray(Box::new(Type::I64)),
+            Symbol(0),
+            Expr::Binary(
+                Box::new(Expr::Int(132)),
+                BinaryOp::Add,
+                Box::new(Expr::Int(123)),
+            ),
+        );
+
+        assert_eq!(ast, expected_statement);
     }
 }
