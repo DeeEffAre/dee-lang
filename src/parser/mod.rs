@@ -22,6 +22,7 @@ pub enum Statement {
     While(Expr, Box<Statement>),
     DoWhile(Box<Statement>, Expr),
     Return(Option<Expr>),
+    Declaration(Type, Symbol, Expr),
 }
 
 #[derive(Debug, PartialEq)]
@@ -101,6 +102,57 @@ impl BinaryOp {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub enum Type {
+    I64,
+    I32,
+    I16,
+    I8,
+    U64,
+    U32,
+    U16,
+    U8,
+    Usize, //TODO:
+    F64,
+    F32,
+    String, //TODO:
+    Bool,
+    Char,
+    DynArr,
+    FixArray, //TODO:
+    Hashmap,
+    Variant,
+    Struct,
+    Result,
+    Maybe,
+}
+
+impl Type {
+    fn from_token(token: &Token) -> Option<Self> {
+        match token.kind {
+            TokenType::TokenI64 => Some(Type::I64),
+            TokenType::TokenI32 => Some(Type::I32),
+            TokenType::TokenI16 => Some(Type::I16),
+            TokenType::TokenI8 => Some(Type::I8),
+            TokenType::TokenU64 => Some(Type::U64),
+            TokenType::TokenU32 => Some(Type::U32),
+            TokenType::TokenU16 => Some(Type::U16),
+            TokenType::TokenU8 => Some(Type::U8),
+            TokenType::TokenF64 => Some(Type::F64),
+            TokenType::TokenF32 => Some(Type::F32),
+            TokenType::TokenBoolean => Some(Type::Bool),
+            TokenType::TokenVariant => Some(Type::Variant),
+            TokenType::TokenMaybe => Some(Type::Maybe),
+            TokenType::TokenResult => Some(Type::Result),
+            TokenType::TokenArray => Some(Type::DynArr),
+            TokenType::TokenHashmap => Some(Type::Hashmap),
+            TokenType::TokenChar => Some(Type::Char),
+            TokenType::TokenStruct => Some(Type::Struct),
+            _ => None,
+        }
+    }
+}
+
 pub struct Parser<'a> {
     lexer: &'a mut Lexer<'a>,
     current_token: Token,
@@ -134,6 +186,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Statement {
+        if self.current_token().is_type() {
+            return self.parse_declaration().expect("Expected declaration");
+        }
+
         match self.current_token().kind {
             TokenType::TokenOpenBrace => self.parse_block().expect("Expected block"), // TODO: proper error handling
             TokenType::TokenIf => self.parse_if().expect("Expected if block"),
@@ -148,6 +204,32 @@ impl<'a> Parser<'a> {
                 Statement::Expr(expr)
             }
         }
+    }
+
+    fn parse_declaration(&mut self) -> Option<Statement> {
+        let type_token = self.current_token();
+        let var_type = Type::from_token(type_token).expect("Expected type"); // TODO: proper error handling
+        self.advance();
+
+        let variable = match &self.current_token().kind {
+            TokenType::TokenIdentifier(sym) => *sym,
+            _ => panic!("Expected variable name"),
+        };
+        self.advance();
+
+        if self.current_token().kind != TokenType::TokenAssign {
+            panic!("Expected '='");
+        }
+        self.advance(); // =
+
+        let variable_value = self.parse_expression(0);
+
+        if self.current_token().kind != TokenType::TokenSemicolon {
+            panic!("Missing semicolon at the end of the statement");
+        }
+        self.advance(); // ;
+
+        Some(Statement::Declaration(var_type, variable, variable_value))
     }
 
     fn parse_block(&mut self) -> Option<Statement> {
@@ -251,6 +333,12 @@ impl<'a> Parser<'a> {
     fn parse_return(&mut self) -> Option<Statement> {
         self.advance(); // return
         let return_expr = self.parse_expression(0);
+
+        if self.current_token().kind != TokenType::TokenSemicolon {
+            panic!("Missing semicolon at the end of the statement"); // TODO: proper error handling
+        }
+        self.advance(); // ;
+
         Some(Statement::Return(Some(return_expr)))
     }
 
@@ -521,6 +609,27 @@ impl Token {
             || self.kind == TokenType::TokenAmpersandAssign
             || self.kind == TokenType::TokenPipeAssign
     }
+
+    fn is_type(&self) -> bool {
+        self.kind == TokenType::TokenI64
+            || self.kind == TokenType::TokenI32
+            || self.kind == TokenType::TokenI16
+            || self.kind == TokenType::TokenI8
+            || self.kind == TokenType::TokenU64
+            || self.kind == TokenType::TokenU32
+            || self.kind == TokenType::TokenU16
+            || self.kind == TokenType::TokenU8
+            || self.kind == TokenType::TokenF64
+            || self.kind == TokenType::TokenF32
+            || self.kind == TokenType::TokenBoolean
+            || self.kind == TokenType::TokenVariant
+            || self.kind == TokenType::TokenMaybe
+            || self.kind == TokenType::TokenResult
+            || self.kind == TokenType::TokenArray
+            || self.kind == TokenType::TokenHashmap
+            || self.kind == TokenType::TokenChar
+            || self.kind == TokenType::TokenStruct
+    }
 }
 
 #[cfg(test)]
@@ -737,7 +846,7 @@ mod test {
     #[test]
     fn test_block() {
         let mut interner = Interner::new();
-        let input = "{foo=2*3}";
+        let input = "{foo=2*3;}";
         let mut lexer = Lexer::init_lexer(input, &mut interner);
         let mut parser = Parser::init_parser(&mut lexer);
 
@@ -757,9 +866,42 @@ mod test {
     }
 
     #[test]
+    fn test_block_multiline() {
+        let mut interner = Interner::new();
+        let input = "{foo=2*3;i8 bar = 1+1;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_expression = Statement::Block(vec![
+            Statement::Expr(Expr::Binary(
+                Box::new(Expr::Ident(Symbol(0))),
+                BinaryOp::Assign,
+                Box::new(Expr::Binary(
+                    Box::new(Expr::Int(2)),
+                    BinaryOp::Mul,
+                    Box::new(Expr::Int(3)),
+                )),
+            )),
+            Statement::Declaration(
+                Type::I8,
+                Symbol(1),
+                Expr::Binary(
+                    Box::new(Expr::Int(1)),
+                    BinaryOp::Add,
+                    Box::new(Expr::Int(1)),
+                ),
+            ),
+        ]);
+
+        assert_eq!(ast, expected_expression);
+    }
+
+    #[test]
     fn test_if() {
         let mut interner = Interner::new();
-        let input = "if (foo == bar){foo=2*3}";
+        let input = "if (foo == bar){foo=2*3;}";
         let mut lexer = Lexer::init_lexer(input, &mut interner);
         let mut parser = Parser::init_parser(&mut lexer);
 
@@ -789,7 +931,7 @@ mod test {
     #[test]
     fn test_if_else() {
         let mut interner = Interner::new();
-        let input = "if (foo == bar){foo=2*3} else {bar=2*3}";
+        let input = "if (foo == bar){foo=2*3;} else {bar=2*3;}";
         let mut lexer = Lexer::init_lexer(input, &mut interner);
         let mut parser = Parser::init_parser(&mut lexer);
 
@@ -829,7 +971,7 @@ mod test {
     #[test]
     fn test_if_elseif() {
         let mut interner = Interner::new();
-        let input = "if (foo == bar){foo=2*3} else if (foo==bar){bar=2*3}";
+        let input = "if (foo == bar){foo=2*3;} else if (foo==bar){bar=2*3;}";
         let mut lexer = Lexer::init_lexer(input, &mut interner);
         let mut parser = Parser::init_parser(&mut lexer);
 
@@ -875,7 +1017,7 @@ mod test {
     #[test]
     fn test_while() {
         let mut interner = Interner::new();
-        let input = "while(foo==bar){foo=2*3}";
+        let input = "while(foo==bar){foo=2*3;}";
         let mut lexer = Lexer::init_lexer(input, &mut interner);
         let mut parser = Parser::init_parser(&mut lexer);
 
@@ -904,7 +1046,7 @@ mod test {
     #[test]
     fn test_do_while() {
         let mut interner = Interner::new();
-        let input = "do {foo=2*3} while(foo==bar)";
+        let input = "do {foo=2*3;} while(foo==bar)";
         let mut lexer = Lexer::init_lexer(input, &mut interner);
         let mut parser = Parser::init_parser(&mut lexer);
 
@@ -933,7 +1075,7 @@ mod test {
     #[test]
     fn test_return() {
         let mut interner = Interner::new();
-        let input = "return foo+1";
+        let input = "return foo+1;";
         let mut lexer = Lexer::init_lexer(input, &mut interner);
         let mut parser = Parser::init_parser(&mut lexer);
 
@@ -946,6 +1088,29 @@ mod test {
         )));
 
         assert_eq!(ast, expected_expression);
+    }
+
+    #[test]
+    fn test_return_multiline() {
+        let mut interner = Interner::new();
+        let input = "return foo+1;return 1;";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast1 = parser.parse_statement();
+
+        let expected_expression1 = Statement::Return(Some(Expr::Binary(
+            Box::new(Expr::Ident(Symbol(0))),
+            BinaryOp::Add,
+            Box::new(Expr::Int(1)),
+        )));
+
+        let ast2 = parser.parse_statement();
+
+        let expected_expression2 = Statement::Return(Some(Expr::Int(1)));
+
+        assert_eq!(ast1, expected_expression1);
+        assert_eq!(ast2, expected_expression2);
     }
 
     #[test]
@@ -1067,5 +1232,38 @@ mod test {
         let mut parser = Parser::init_parser(&mut lexer);
 
         let _ast = parser.parse_expression(0);
+    }
+
+    #[test]
+    fn test_declaration() {
+        let mut interner = Interner::new();
+        let input = "i64 bar = 132+123;";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::Declaration(
+            Type::I64,
+            Symbol(0),
+            Expr::Binary(
+                Box::new(Expr::Int(132)),
+                BinaryOp::Add,
+                Box::new(Expr::Int(123)),
+            ),
+        );
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    #[should_panic(expected = "Missing semicolon at the end of the statement")]
+    fn declaration_missing_semicolon() {
+        let mut interner = Interner::new();
+        let input = "i64 bar = 132+123";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let _ast = parser.parse_statement();
     }
 }

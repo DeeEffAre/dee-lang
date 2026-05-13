@@ -549,19 +549,18 @@ impl<'a> Lexer<'a> {
             self.read_char();
         }
 
-        let kind: TokenType;
-        if self.current_char == b'\0' {
+        let kind: TokenType = if self.current_char == b'\0' {
             self.errors.push(CompileError {
                 message: Box::from("Unclosed string constant"),
                 span: Span::new(start, self.position),
             });
-            kind = TokenType::TokenError(ErrorId(2));
+            TokenType::TokenError(ErrorId(2))
         } else {
             self.read_char(); // closing "
             let string_const_bytes = &self.input[start..self.position];
             let symbol = self.interner.intern(string_const_bytes);
-            kind = TokenType::TokenStringConstant(symbol);
-        }
+            TokenType::TokenStringConstant(symbol)
+        };
 
         Token {
             kind,
