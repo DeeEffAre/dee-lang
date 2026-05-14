@@ -15,6 +15,12 @@ pub enum Expr {
 }
 
 #[derive(Debug, PartialEq)]
+pub struct FunctionArg {
+    pub ty: Type,
+    pub name: Symbol,
+}
+
+#[derive(Debug, PartialEq)]
 pub enum Statement {
     Block(Vec<Statement>),
     Expr(Expr),
@@ -23,6 +29,16 @@ pub enum Statement {
     DoWhile(Box<Statement>, Expr),
     Return(Option<Expr>),
     Declaration(Type, Symbol, Expr),
+    ShortDeclaration(Type, Symbol),
+
+    // i64 sum(i32 num1, i32 num2) -> Calculator {};
+    FunctionDeclaration(
+        Type,
+        Symbol,
+        Vec<FunctionArg>,
+        Option<Symbol>,
+        Box<Statement>,
+    ),
 }
 
 #[derive(Debug, PartialEq)]
@@ -200,6 +216,9 @@ impl<'a> Parser<'a> {
             TokenType::TokenWhile => self.parse_while().expect("Expected while block"),
             TokenType::TokenDo => self.parse_do_while().expect("Expected return statement"),
             TokenType::TokenReturn => self.parse_return().expect("Expected return statement"),
+            TokenType::TokenFunc => self
+                .parse_function_declaration()
+                .expect("Expected a function declaration"),
             _ => {
                 let expr = self.parse_expression(0);
                 if matches!(self.current_token().kind, TokenType::TokenSemicolon) {
@@ -237,7 +256,12 @@ impl<'a> Parser<'a> {
         self.advance();
 
         if self.current_token().kind != TokenType::TokenAssign {
-            panic!("Expected '='");
+            if self.current_token().kind != TokenType::TokenSemicolon {
+                panic!("Expected '=' or ';'");
+            }
+            self.advance(); // ;
+
+            return Some(Statement::ShortDeclaration(var_type, variable));
         }
         self.advance(); // =
 
@@ -249,6 +273,83 @@ impl<'a> Parser<'a> {
         self.advance(); // ;
 
         Some(Statement::Declaration(var_type, variable, variable_value))
+    }
+
+    fn parse_function_declaration_arg(&mut self) -> (Type, Symbol) {
+        let arg_type = self.parse_type();
+        let arg_symbol = match &self.current_token().kind {
+            TokenType::TokenIdentifier(sym) => *sym,
+            _ => panic!("Expected argument name"), // TODO: proper error handling
+        };
+        self.advance();
+
+        return (arg_type, arg_symbol);
+    }
+
+    fn parse_function_declaration(&mut self) -> Option<Statement> {
+        self.advance(); // func
+
+        let return_type = self.parse_type();
+
+        let function_name = match &self.current_token().kind {
+            TokenType::TokenIdentifier(sym) => *sym,
+            _ => panic!("Expected function name"),
+        };
+        self.advance();
+
+        if self.current_token().kind != TokenType::TokenOpenParen {
+            panic!("Expected '('") // TODO: proper error handling
+        }
+        self.advance(); // (
+
+        let mut args = vec![];
+        while self.current_token().kind != TokenType::TokenCloseParen {
+            let (arg_type, arg_symbol) = self.parse_function_declaration_arg();
+
+            args.push(FunctionArg {
+                ty: arg_type,
+                name: arg_symbol,
+            });
+
+            while self.current_token().kind == TokenType::TokenComma {
+                self.advance();
+                let (arg_type, arg_symbol) = self.parse_function_declaration_arg();
+                args.push(FunctionArg {
+                    ty: arg_type,
+                    name: arg_symbol,
+                });
+            }
+        }
+
+        if self.current_token().kind != TokenType::TokenCloseParen {
+            panic!("Expected ')'"); // TODO: proper error handling
+        }
+        self.advance();
+
+        // Method binding
+        let binded_struct = if self.current_token().kind == TokenType::TokenArrow {
+            self.advance(); // ->
+
+            let symbol = match &self.current_token().kind {
+                TokenType::TokenIdentifier(sym) => *sym,
+                _ => panic!("Expected function name"),
+            };
+            self.advance();
+
+            Some(symbol)
+        } else {
+            None
+        };
+
+        let function_block = self.parse_statement();
+
+        Some(Statement::FunctionDeclaration(
+            return_type,
+            function_name,
+            args,
+            binded_struct,
+            Box::new(function_block),
+        ))
     }
 
     fn parse_block(&mut self) -> Option<Statement> {
@@ -1312,6 +1413,20 @@ mod test {
     }
 
     #[test]
+    fn test_short_declaration() {
+        let mut interner = Interner::new();
+        let input = "i64 foo;";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::ShortDeclaration(Type::I64, Symbol(0));
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
     #[should_panic(expected = "Missing semicolon at the end of the statement")]
     fn declaration_missing_semicolon() {
         let mut interner = Interner::new();
@@ -1340,6 +1455,128 @@ mod test {
                 BinaryOp::Add,
                 Box::new(Expr::Int(123)),
             ),
+        );
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_function_declaration_without_method_binding() {
+        let mut interner = Interner::new();
+        let input = "func i64 sum(i64 num1, i64 num2) {return num1 + num2;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::FunctionDeclaration(
+            Type::I64,
+            Symbol(0),
+            vec![
+                FunctionArg {
+                    ty: Type::I64,
+                    name: Symbol(1),
+                },
+                FunctionArg {
+                    ty: Type::I64,
+                    name: Symbol(2),
+                },
+            ],
+            None,
+            Box::new(Statement::Block(vec![Statement::Return(Some(
+                Expr::Binary(
+                    Box::new(Expr::Ident(Symbol(1))),
+                    BinaryOp::Add,
+                    Box::new(Expr::Ident(Symbol(2))),
+                ),
+            ))])),
+        );
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_function_declaration_without_args_and_without_method_binding() {
+        let mut interner = Interner::new();
+        let input = "func i64 sum() {return num1 + num2;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::FunctionDeclaration(
+            Type::I64,
+            Symbol(0),
+            vec![],
+            None,
+            Box::new(Statement::Block(vec![Statement::Return(Some(
+                Expr::Binary(
+                    Box::new(Expr::Ident(Symbol(1))),
+                    BinaryOp::Add,
+                    Box::new(Expr::Ident(Symbol(2))),
+                ),
+            ))])),
+        );
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_function_declaration_with_method_binding() {
+        let mut interner = Interner::new();
+        let input = "func i64 sum(i64 num1, i64 num2) -> Parser {return num1 + num2;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::FunctionDeclaration(
+            Type::I64,
+            Symbol(0),
+            vec![
+                FunctionArg {
+                    ty: Type::I64,
+                    name: Symbol(1),
+                },
+                FunctionArg {
+                    ty: Type::I64,
+                    name: Symbol(2),
+                },
+            ],
+            Some(Symbol(3)),
+            Box::new(Statement::Block(vec![Statement::Return(Some(
+                Expr::Binary(
+                    Box::new(Expr::Ident(Symbol(1))),
+                    BinaryOp::Add,
+                    Box::new(Expr::Ident(Symbol(2))),
+                ),
+            ))])),
+        );
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_function_declaration_without_args_and_with_method_binding() {
+        let mut interner = Interner::new();
+        let input = "func i64 sum() -> Parser {return 1 + 1;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::FunctionDeclaration(
+            Type::I64,
+            Symbol(0),
+            vec![],
+            Some(Symbol(1)),
+            Box::new(Statement::Block(vec![Statement::Return(Some(
+                Expr::Binary(
+                    Box::new(Expr::Int(1)),
+                    BinaryOp::Add,
+                    Box::new(Expr::Int(1)),
+                ),
+            ))])),
         );
 
         assert_eq!(ast, expected_statement);

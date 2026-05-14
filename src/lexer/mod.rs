@@ -440,6 +440,7 @@ impl<'a> Lexer<'a> {
             b"Maybe" => TokenType::TokenMaybe,
             b"Result" => TokenType::TokenResult,
             b"bool" => TokenType::TokenBoolean,
+            b"func" => TokenType::TokenFunc,
 
             // Integer types
             b"i64" => TokenType::TokenI64,
@@ -661,6 +662,9 @@ pub enum TokenType {
     TokenTypedef,
     TokenVoid,
     TokenWhile,
+
+    // function declaration
+    TokenFunc,
 
     // replacement of switch
     TokenMatch,
