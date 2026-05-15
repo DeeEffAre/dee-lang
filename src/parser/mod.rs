@@ -12,6 +12,18 @@ pub enum Expr {
     FunctionCall(Box<Expr>, Vec<Expr>), // function name, args
     FieldAccess(Box<Expr>, Symbol),
     ArraySub(Box<Expr>, Box<Expr>),
+    Match(Box<Expr>, Vec<(Pattern, Statement)>),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Pattern {
+    Wildcard,
+    None,
+    Some(Box<Pattern>),
+    Ok(Box<Pattern>),
+    Err(Box<Pattern>),
+    Variant(Symbol, Box<Pattern>),
+    Binding(Symbol),
 }
 
 #[derive(Debug, PartialEq)]
@@ -288,7 +300,7 @@ impl<'a> Parser<'a> {
         };
         self.advance();
 
-        return (arg_type, arg_symbol);
+        (arg_type, arg_symbol)
     }
 
     fn parse_function_declaration(&mut self) -> Option<Statement> {
@@ -404,6 +416,123 @@ impl<'a> Parser<'a> {
         self.advance(); // }
 
         Some(Statement::Struct(struct_name, type_field_pairs))
+    }
+
+    fn parse_pattern(&mut self) -> Pattern {
+        match &self.current_token().kind {
+            TokenType::TokenUnderscore => {
+                self.advance();
+                Pattern::Wildcard
+            }
+            TokenType::TokenNone => {
+                self.advance();
+                Pattern::None
+            }
+            TokenType::TokenSome => {
+                self.advance();
+                if self.current_token().kind != TokenType::TokenOpenParen {
+                    panic!("Expected '(' after Some");
+                }
+                self.advance(); // (
+                let inner = self.parse_pattern();
+                if self.current_token().kind != TokenType::TokenCloseParen {
+                    panic!("Expected ')' after Some pattern");
+                }
+                self.advance(); // )
+                Pattern::Some(Box::new(inner))
+            }
+            TokenType::TokenOk => {
+                self.advance();
+                if self.current_token().kind != TokenType::TokenOpenParen {
+                    panic!("Expected '(' after Some");
+                }
+                self.advance(); // (
+                let inner = self.parse_pattern();
+                if self.current_token().kind != TokenType::TokenCloseParen {
+                    panic!("Expected ')' after Some pattern");
+                }
+                self.advance(); // )
+                Pattern::Ok(Box::new(inner))
+            }
+            TokenType::TokenErr => {
+                self.advance();
+                if self.current_token().kind != TokenType::TokenOpenParen {
+                    panic!("Expected '(' after Some");
+                }
+                self.advance(); // (
+                let inner = self.parse_pattern();
+                if self.current_token().kind != TokenType::TokenCloseParen {
+                    panic!("Expected ')' after Some pattern");
+                }
+                self.advance(); // )
+                Pattern::Err(Box::new(inner))
+            }
+            TokenType::TokenIdentifier(sym) => {
+                let sym = *sym;
+                self.advance();
+                if self.current_token().kind == TokenType::TokenOpenParen {
+                    self.advance(); // (
+                    let inner = self.parse_pattern();
+                    if self.current_token().kind != TokenType::TokenCloseParen {
+                        panic!("Expected ')' after variant pattern");
+                    }
+                    self.advance(); // )
+                    Pattern::Variant(sym, Box::new(inner))
+                } else {
+                    Pattern::Binding(sym)
+                }
+            }
+            _ => panic!("Expected pattern"),
+        }
+    }
+
+    fn parse_match(&mut self) -> Option<Expr> {
+        self.advance(); // match
+
+        if self.current_token().kind != TokenType::TokenOpenParen {
+            panic!("Expected '('"); // TODO: proper error handling
+        }
+        self.advance(); // (
+
+        let eval_expr = self.parse_expression(0);
+
+        if self.current_token().kind != TokenType::TokenCloseParen {
+            panic!("Expected ')'"); // TODO: proper error handling
+        }
+        self.advance(); // )
+
+        if self.current_token().kind != TokenType::TokenOpenBrace {
+            panic!("Expected '{{'"); // TODO: proper error handling
+        }
+        self.advance(); // {
+
+        let mut arms = vec![];
+        while self.current_token().kind != TokenType::TokenCloseBrace
+            && self.current_token().kind != TokenType::TokenEOF
+        {
+            if self.current_token().kind != TokenType::TokenPipe {
+                panic!("Expected '|'"); // TODO: proper error handling
+            }
+            self.advance(); // |
+
+            let pattern = self.parse_pattern();
+
+            if self.current_token.kind != TokenType::TokenArrow {
+                panic!("Expected '->'"); // TODO: proper error handling
+            }
+            self.advance(); // ->
+
+            let arm_statement = self.parse_statement();
+
+            arms.push((pattern, arm_statement));
+        }
+
+        if self.current_token().kind != TokenType::TokenCloseBrace {
+            panic!("Expected '}}'"); // TODO: proper error handling
+        }
+        self.advance();
+
+        Some(Expr::Match(Box::new(eval_expr), arms))
     }
 
     fn parse_block(&mut self) -> Option<Statement> {
@@ -578,6 +707,7 @@ impl<'a> Parser<'a> {
                 let right = self.parse_expression(70);
                 Expr::PrefixUnary(UnaryOp::Dereference, Box::new(right))
             }
+            TokenType::TokenMatch => return self.parse_match().expect("Expected match"),
             _ => self.parse_primary().expect("expected expression"), // TODO: proper error printing
         };
 
@@ -1679,6 +1809,64 @@ mod test {
             Symbol(0),
             vec![(Type::Usize, Symbol(1)), (Type::String, Symbol(2))],
         );
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_match_1() {
+        let mut interner = Interner::new();
+        let input = "match (foo) {|Ok(bar) -> {return bar;} |Err(error) -> {printf(error);}};";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::Expr(Expr::Match(
+            Box::new(Expr::Ident(Symbol(0))),
+            vec![
+                (
+                    Pattern::Ok(Box::new(Pattern::Binding(Symbol(1)))),
+                    Statement::Block(vec![Statement::Return(Some(Expr::Ident(Symbol(1))))]),
+                ),
+                (
+                    Pattern::Err(Box::new(Pattern::Binding(Symbol(2)))),
+                    Statement::Block(vec![Statement::Expr(Expr::FunctionCall(
+                        Box::new(Expr::Ident(Symbol(3))),
+                        vec![Expr::Ident(Symbol(2))],
+                    ))]),
+                ),
+            ],
+        ));
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_match_2() {
+        let mut interner = Interner::new();
+        let input = "match (foo) {|Foo -> {return bar;} |Bar(bar) -> {printf(bar);}};";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::Expr(Expr::Match(
+            Box::new(Expr::Ident(Symbol(0))),
+            vec![
+                (
+                    Pattern::Binding(Symbol(1)),
+                    Statement::Block(vec![Statement::Return(Some(Expr::Ident(Symbol(2))))]),
+                ),
+                (
+                    Pattern::Variant(Symbol(3), Box::new(Pattern::Binding(Symbol(2)))),
+                    Statement::Block(vec![Statement::Expr(Expr::FunctionCall(
+                        Box::new(Expr::Ident(Symbol(4))),
+                        vec![Expr::Ident(Symbol(2))],
+                    ))]),
+                ),
+            ],
+        ));
 
         assert_eq!(ast, expected_statement);
     }
