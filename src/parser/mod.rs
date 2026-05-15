@@ -33,6 +33,7 @@ pub enum Statement {
 
     // i64 sum(i32 num1, i32 num2) -> Calculator {};
     FunctionDeclaration(
+        bool,
         Type,
         Symbol,
         Vec<FunctionArg>,
@@ -205,7 +206,7 @@ impl<'a> Parser<'a> {
         self.current_token = std::mem::replace(&mut self.peeked_token, self.lexer.next_token())
     }
 
-    fn parse_statement(&mut self) -> Statement {
+    pub fn parse_statement(&mut self) -> Statement {
         if self.current_token().is_type() {
             return self.parse_declaration().expect("Expected declaration");
         }
@@ -216,7 +217,7 @@ impl<'a> Parser<'a> {
             TokenType::TokenWhile => self.parse_while().expect("Expected while block"),
             TokenType::TokenDo => self.parse_do_while().expect("Expected return statement"),
             TokenType::TokenReturn => self.parse_return().expect("Expected return statement"),
-            TokenType::TokenFunc => self
+            TokenType::TokenFunc | TokenType::TokenStatic => self
                 .parse_function_declaration()
                 .expect("Expected a function declaration"),
             _ => {
@@ -287,6 +288,12 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_function_declaration(&mut self) -> Option<Statement> {
+        let mut static_modifier = false;
+        if self.current_token().kind == TokenType::TokenStatic {
+            static_modifier = true;
+            self.advance(); // static
+        }
+
         self.advance(); // func
 
         let return_type = self.parse_type();
@@ -344,6 +351,7 @@ impl<'a> Parser<'a> {
         let function_block = self.parse_statement();
 
         Some(Statement::FunctionDeclaration(
+            static_modifier,
             return_type,
             function_name,
             args,
@@ -1470,6 +1478,7 @@ mod test {
         let ast = parser.parse_statement();
 
         let expected_statement = Statement::FunctionDeclaration(
+            false,
             Type::I64,
             Symbol(0),
             vec![
@@ -1505,6 +1514,7 @@ mod test {
         let ast = parser.parse_statement();
 
         let expected_statement = Statement::FunctionDeclaration(
+            false,
             Type::I64,
             Symbol(0),
             vec![],
@@ -1531,6 +1541,7 @@ mod test {
         let ast = parser.parse_statement();
 
         let expected_statement = Statement::FunctionDeclaration(
+            false,
             Type::I64,
             Symbol(0),
             vec![
@@ -1566,6 +1577,34 @@ mod test {
         let ast = parser.parse_statement();
 
         let expected_statement = Statement::FunctionDeclaration(
+            false,
+            Type::I64,
+            Symbol(0),
+            vec![],
+            Some(Symbol(1)),
+            Box::new(Statement::Block(vec![Statement::Return(Some(
+                Expr::Binary(
+                    Box::new(Expr::Int(1)),
+                    BinaryOp::Add,
+                    Box::new(Expr::Int(1)),
+                ),
+            ))])),
+        );
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_function_declaration_static_modifier() {
+        let mut interner = Interner::new();
+        let input = "static func i64 sum() -> Parser {return 1 + 1;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::FunctionDeclaration(
+            true,
             Type::I64,
             Symbol(0),
             vec![],
