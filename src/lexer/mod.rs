@@ -452,6 +452,7 @@ impl<'a> Lexer<'a> {
             b"Ok" => TokenType::TokenOk,
             b"Err" => TokenType::TokenErr,
             b"None" => TokenType::TokenNone,
+            b"defer" => TokenType::TokenDefer,
 
             // Integer types
             b"i64" => TokenType::TokenI64,
@@ -730,6 +731,8 @@ pub enum TokenType {
 
     // string type
     TokenString,
+
+    TokenDefer,
 
     // Single Character
     // (

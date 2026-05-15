@@ -55,6 +55,7 @@ pub enum Statement {
 
     // struct Calculator {type: field}
     Struct(Symbol, Vec<(Type, Symbol)>),
+    Defer(Box<Statement>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -236,6 +237,7 @@ impl<'a> Parser<'a> {
                 .parse_function_declaration()
                 .expect("Expected a function declaration"),
             TokenType::TokenStruct => self.parse_struct_definition().expect("Expected a struct"),
+            TokenType::TokenDefer => self.parse_defer().expect("Expected a defer statement"),
             _ => {
                 let expr = self.parse_expression(0);
                 if matches!(self.current_token().kind, TokenType::TokenSemicolon) {
@@ -533,6 +535,14 @@ impl<'a> Parser<'a> {
         self.advance();
 
         Some(Expr::Match(Box::new(eval_expr), arms))
+    }
+
+    fn parse_defer(&mut self) -> Option<Statement> {
+        self.advance(); // defer
+
+        let defer_statement = self.parse_statement();
+
+        Some(Statement::Defer(Box::new(defer_statement)))
     }
 
     fn parse_block(&mut self) -> Option<Statement> {
@@ -1867,6 +1877,23 @@ mod test {
                 ),
             ],
         ));
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_defer() {
+        let mut interner = Interner::new();
+        let input = "defer free(foo);";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::Defer(Box::new(Statement::Expr(Expr::FunctionCall(
+            Box::new(Expr::Ident(Symbol(0))),
+            vec![Expr::Ident(Symbol(1))],
+        ))));
 
         assert_eq!(ast, expected_statement);
     }
