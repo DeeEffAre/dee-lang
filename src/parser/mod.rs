@@ -40,6 +40,9 @@ pub enum Statement {
         Option<Symbol>,
         Box<Statement>,
     ),
+
+    // struct Calculator {type: field}
+    Struct(Symbol, Vec<(Type, Symbol)>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -220,6 +223,7 @@ impl<'a> Parser<'a> {
             TokenType::TokenFunc | TokenType::TokenStatic => self
                 .parse_function_declaration()
                 .expect("Expected a function declaration"),
+            TokenType::TokenStruct => self.parse_struct_definition().expect("Expected a struct"),
             _ => {
                 let expr = self.parse_expression(0);
                 if matches!(self.current_token().kind, TokenType::TokenSemicolon) {
@@ -358,6 +362,48 @@ impl<'a> Parser<'a> {
             binded_struct,
             Box::new(function_block),
         ))
+    }
+
+    fn parse_struct_definition(&mut self) -> Option<Statement> {
+        self.advance(); // struct
+
+        let struct_name = match &self.current_token().kind {
+            TokenType::TokenIdentifier(sym) => *sym,
+            _ => panic!("Expected struct name"), // TODO: proper error handling
+        };
+        self.advance();
+
+        if self.current_token().kind != TokenType::TokenOpenBrace {
+            panic!("Expected '{{'") // TODO: proper error handling
+        }
+        self.advance(); // {
+
+        let mut type_field_pairs = vec![];
+        while self.current_token().kind != TokenType::TokenCloseBrace
+            && self.current_token().kind != TokenType::TokenEOF
+        {
+            let field_type = self.parse_type();
+            let field_name = match &self.current_token().kind {
+                TokenType::TokenIdentifier(sym) => *sym,
+                _ => panic!("Expected field name"), // TODO: proper error handling
+            };
+            self.advance();
+
+            if self.current_token().kind != TokenType::TokenSemicolon {
+                panic!("Expected ';'") // TODO: proper error handling
+            }
+            self.advance();
+
+            type_field_pairs.push((field_type, field_name));
+        }
+
+        if self.current_token().kind == TokenType::TokenEOF {
+            panic!("Expected '}}'") // TODO: proper error handling
+        }
+
+        self.advance(); // }
+
+        Some(Statement::Struct(struct_name, type_field_pairs))
     }
 
     fn parse_block(&mut self) -> Option<Statement> {
@@ -766,7 +812,6 @@ impl Token {
             || self.kind == TokenType::TokenArray
             || self.kind == TokenType::TokenHashmap
             || self.kind == TokenType::TokenChar
-            || self.kind == TokenType::TokenStruct
             || self.kind == TokenType::TokenString
             || self.kind == TokenType::TokenUsize
     }
@@ -1616,6 +1661,23 @@ mod test {
                     Box::new(Expr::Int(1)),
                 ),
             ))])),
+        );
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_struct_definition() {
+        let mut interner = Interner::new();
+        let input = "struct Lexer {usize position; string input;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::Struct(
+            Symbol(0),
+            vec![(Type::Usize, Symbol(1)), (Type::String, Symbol(2))],
         );
 
         assert_eq!(ast, expected_statement);
