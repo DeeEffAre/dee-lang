@@ -13,6 +13,15 @@ pub enum Expr {
     FieldAccess(Box<Expr>, Symbol),
     ArraySub(Box<Expr>, Box<Expr>),
     Match(Box<Expr>, Vec<(Pattern, Statement)>),
+    Variant(Box<Expr>, Pattern),
+
+    // builtin variants
+    None,
+    Ok(Box<Expr>),
+    Some(Box<Expr>),
+    Err(Box<Expr>),
+
+    ArrayInit(Vec<Expr>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -671,6 +680,42 @@ impl<'a> Parser<'a> {
                 Some(inner)
             }
 
+            // builtin variants
+            TokenType::TokenNone => {
+                self.advance();
+                return Some(Expr::None);
+            }
+            TokenType::TokenOk => {
+                self.advance();
+
+                if self.current_token().kind != TokenType::TokenOpenParen {
+                    panic!("Expected '('"); // TODO: proper error handling
+                }
+                let inner = self.parse_primary().expect("Expected value");
+
+                return Some(Expr::Ok(Box::new(inner)));
+            }
+            TokenType::TokenSome => {
+                self.advance();
+
+                if self.current_token().kind != TokenType::TokenOpenParen {
+                    panic!("Expected '('"); // TODO: proper error handling
+                }
+                let inner = self.parse_primary().expect("Expected value");
+
+                return Some(Expr::Some(Box::new(inner)));
+            }
+            TokenType::TokenErr => {
+                self.advance();
+
+                if self.current_token().kind != TokenType::TokenOpenParen {
+                    panic!("Expected '('"); // TODO: proper error handling
+                }
+                let inner = self.parse_primary().expect("Expected value");
+
+                return Some(Expr::Err(Box::new(inner)));
+            }
+
             TokenType::TokenIdentifier(sym) => Some(Expr::Ident(sym)),
             _ => None,
         };
@@ -718,6 +763,25 @@ impl<'a> Parser<'a> {
                 Expr::PrefixUnary(UnaryOp::Dereference, Box::new(right))
             }
             TokenType::TokenMatch => return self.parse_match().expect("Expected match"),
+            TokenType::TokenOpenBrace => {
+                self.advance(); // {
+
+                let mut elems = vec![];
+                while self.current_token().kind != TokenType::TokenCloseBrace {
+                    elems.push(self.parse_expression(0));
+                    while self.current_token().kind == TokenType::TokenComma {
+                        self.advance();
+                        elems.push(self.parse_expression(0));
+                    }
+                }
+
+                if self.current_token().kind != TokenType::TokenCloseBrace {
+                    panic!("Expected '}}'"); // TODO: proper error handling
+                }
+                self.advance();
+
+                Expr::ArrayInit(elems)
+            }
             _ => self.parse_primary().expect("expected expression"), // TODO: proper error printing
         };
 
@@ -824,6 +888,24 @@ impl<'a> Parser<'a> {
                 self.advance();
 
                 left = Expr::ArraySub(Box::new(left), Box::new(sub));
+                continue;
+            }
+
+            // variant (enum) initialization
+            if tok.kind == TokenType::TokenColon
+                && self.peeked_token().kind == TokenType::TokenColon
+            {
+                self.advance(); // :
+
+                if self.current_token().kind != TokenType::TokenColon {
+                    panic!("Expected ':'"); // TODO: proper error handling
+                }
+                self.advance(); // :
+
+                let pattern = self.parse_pattern();
+
+                left = Expr::Variant(Box::new(left), pattern);
+
                 continue;
             }
 
@@ -1896,5 +1978,155 @@ mod test {
         ))));
 
         assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_variant_initialization_without_val() {
+        let mut interner = Interner::new();
+        let input = "foo = Var::Bar;";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::Expr(Expr::Binary(
+            Box::new(Expr::Ident(Symbol(0))),
+            BinaryOp::Assign,
+            Box::new(Expr::Variant(
+                Box::new(Expr::Ident(Symbol(1))),
+                Pattern::Binding(Symbol(2)),
+            )),
+        ));
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_variant_initialization_with_val() {
+        let mut interner = Interner::new();
+        let input = "foo = Var::Bar(bar);";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::Expr(Expr::Binary(
+            Box::new(Expr::Ident(Symbol(0))),
+            BinaryOp::Assign,
+            Box::new(Expr::Variant(
+                Box::new(Expr::Ident(Symbol(1))),
+                Pattern::Variant(Symbol(2), Box::new(Pattern::Binding(Symbol(3)))),
+            )),
+        ));
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_variant_initialization_none() {
+        let mut interner = Interner::new();
+        let input = "foo = None;";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::Expr(Expr::Binary(
+            Box::new(Expr::Ident(Symbol(0))),
+            BinaryOp::Assign,
+            Box::new(Expr::None),
+        ));
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_variant_initialization_ok() {
+        let mut interner = Interner::new();
+        let input = "foo = Ok(bar);";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::Expr(Expr::Binary(
+            Box::new(Expr::Ident(Symbol(0))),
+            BinaryOp::Assign,
+            Box::new(Expr::Ok(Box::new(Expr::Ident(Symbol(1))))),
+        ));
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_variant_initialization_some() {
+        let mut interner = Interner::new();
+        let input = "foo = Some(bar);";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let expected_statement = Statement::Expr(Expr::Binary(
+            Box::new(Expr::Ident(Symbol(0))),
+            BinaryOp::Assign,
+            Box::new(Expr::Some(Box::new(Expr::Ident(Symbol(1))))),
+        ));
+
+        assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_variant_initialization_err() {
+        let mut interner = Interner::new();
+        let input = "foo = Err(bar);";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast1 = parser.parse_statement();
+
+        let expected_statement = Statement::Expr(Expr::Binary(
+            Box::new(Expr::Ident(Symbol(0))),
+            BinaryOp::Assign,
+            Box::new(Expr::Err(Box::new(Expr::Ident(Symbol(1))))),
+        ));
+
+        assert_eq!(ast1, expected_statement);
+    }
+
+    #[test]
+    fn test_array_initialization() {
+        let mut interner = Interner::new();
+        let input = "i64[] foo = {1,2,3};";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast1 = parser.parse_statement();
+
+        let expected_statement = Statement::Declaration(
+            Type::FixArray(Box::new(Type::I64)),
+            Symbol(0),
+            Expr::ArrayInit(vec![Expr::Int(1), Expr::Int(2), Expr::Int(3)]),
+        );
+
+        assert_eq!(ast1, expected_statement);
+    }
+
+    #[test]
+    fn test_array_initialization_empty() {
+        let mut interner = Interner::new();
+        let input = "i64[] foo = {};";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast1 = parser.parse_statement();
+
+        let expected_statement = Statement::Declaration(
+            Type::FixArray(Box::new(Type::I64)),
+            Symbol(0),
+            Expr::ArrayInit(vec![]),
+        );
+
+        assert_eq!(ast1, expected_statement);
     }
 }

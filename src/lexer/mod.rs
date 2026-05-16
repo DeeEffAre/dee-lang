@@ -630,6 +630,7 @@ impl Interner {
         }
     }
 
+    #[inline]
     fn intern(&mut self, name: &[u8]) -> Symbol {
         if let Some(&id) = self.map.get(name) {
             return id;
@@ -645,6 +646,7 @@ impl Interner {
         symbol
     }
 
+    #[inline]
     pub fn lookup(&self, symbol: Symbol) -> &[u8] {
         &self.strings[symbol.0 as usize]
     }
