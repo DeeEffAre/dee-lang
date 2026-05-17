@@ -65,6 +65,10 @@ pub enum Statement {
     // struct Calculator {type: field}
     Struct(Symbol, Vec<(Type, Symbol)>),
     Defer(Box<Statement>),
+    For(Box<Statement>, Expr, Expr, Box<Statement>),
+
+    Break,
+    Continue,
 }
 
 #[derive(Debug, PartialEq)]
@@ -247,6 +251,17 @@ impl<'a> Parser<'a> {
                 .expect("Expected a function declaration"),
             TokenType::TokenStruct => self.parse_struct_definition().expect("Expected a struct"),
             TokenType::TokenDefer => self.parse_defer().expect("Expected a defer statement"),
+            TokenType::TokenFor => self.parse_for().expect("Expected a for loop"),
+            TokenType::TokenContinue => {
+                self.advance(); // continue
+                self.advance(); // ;
+                Statement::Continue
+            }
+            TokenType::TokenBreak => {
+                self.advance(); // break
+                self.advance(); // ;
+                Statement::Break
+            }
             _ => {
                 let expr = self.parse_expression(0);
                 if matches!(self.current_token().kind, TokenType::TokenSemicolon) {
@@ -552,6 +567,40 @@ impl<'a> Parser<'a> {
         let defer_statement = self.parse_statement();
 
         Some(Statement::Defer(Box::new(defer_statement)))
+    }
+
+    fn parse_for(&mut self) -> Option<Statement> {
+        self.advance(); // for
+
+        if self.current_token().kind != TokenType::TokenOpenParen {
+            panic!("Expected '('"); // TODO: proper error handling
+        }
+        self.advance(); // (
+
+        let for_declaration = self.parse_statement();
+
+        let for_condition = self.parse_expression(0);
+
+        if self.current_token().kind != TokenType::TokenSemicolon {
+            panic!("Expected ';'"); // TODO: proper error handling
+        }
+        self.advance(); // ;
+
+        let for_step = self.parse_expression(0);
+
+        if self.current_token().kind != TokenType::TokenCloseParen {
+            panic!("Expected ')'"); // TODO: proper error handling
+        }
+        self.advance(); // )
+
+        let for_block = self.parse_statement();
+
+        Some(Statement::For(
+            Box::new(for_declaration),
+            for_condition,
+            for_step,
+            Box::new(for_block),
+        ))
     }
 
     fn parse_block(&mut self) -> Option<Statement> {
@@ -2125,6 +2174,39 @@ mod test {
             Type::FixArray(Box::new(Type::I64)),
             Symbol(0),
             Expr::ArrayInit(vec![]),
+        );
+
+        assert_eq!(ast1, expected_statement);
+    }
+
+    #[test]
+    fn test_for_loop() {
+        let mut interner = Interner::new();
+        let input = "for (i32 i = 0; i < 10; i += 1) {printf(i);continue;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast1 = parser.parse_statement();
+
+        let expected_statement = Statement::For(
+            Box::new(Statement::Declaration(Type::I32, Symbol(0), Expr::Int(0))),
+            Expr::Binary(
+                Box::new(Expr::Ident(Symbol(0))),
+                BinaryOp::LessThen,
+                Box::new(Expr::Int(10)),
+            ),
+            Expr::Binary(
+                Box::new(Expr::Ident(Symbol(0))),
+                BinaryOp::AddAssign,
+                Box::new(Expr::Int(1)),
+            ),
+            Box::new(Statement::Block(vec![
+                Statement::Expr(Expr::FunctionCall(
+                    Box::new(Expr::Ident(Symbol(1))),
+                    vec![Expr::Ident(Symbol(0))],
+                )),
+                Statement::Continue,
+            ])),
         );
 
         assert_eq!(ast1, expected_statement);
