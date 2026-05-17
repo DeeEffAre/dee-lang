@@ -585,9 +585,9 @@ impl<'a> Lexer<'a> {
     }
 }
 
-struct CompileError {
-    message: Box<str>,
-    span: Span,
+pub struct CompileError {
+    pub message: Box<str>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

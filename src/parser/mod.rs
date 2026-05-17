@@ -1,4 +1,4 @@
-use crate::lexer::{Lexer, Symbol, Token, TokenType};
+use crate::lexer::{CompileError, Lexer, Symbol, Token, TokenType};
 
 #[derive(Debug, PartialEq)]
 pub enum Expr {
@@ -22,6 +22,8 @@ pub enum Expr {
     Err(Box<Expr>),
 
     ArrayInit(Vec<Expr>),
+
+    Error,
 }
 
 #[derive(Debug, PartialEq)]
@@ -69,6 +71,8 @@ pub enum Statement {
 
     Break,
     Continue,
+
+    Error,
 }
 
 #[derive(Debug, PartialEq)]
@@ -207,6 +211,7 @@ pub struct Parser<'a> {
     lexer: &'a mut Lexer<'a>,
     current_token: Token,
     peeked_token: Token,
+    errors: Vec<CompileError>,
 }
 
 impl<'a> Parser<'a> {
@@ -216,6 +221,7 @@ impl<'a> Parser<'a> {
             lexer,
             current_token: Token::default(),
             peeked_token: Token::default(),
+            errors: Vec::new(),
         };
 
         parser.advance();
@@ -235,9 +241,21 @@ impl<'a> Parser<'a> {
         self.current_token = std::mem::replace(&mut self.peeked_token, self.lexer.next_token())
     }
 
+    fn synchronize(&mut self) {
+        while self.current_token().kind != TokenType::TokenSemicolon
+            && self.current_token().kind != TokenType::TokenCloseBrace
+            && self.current_token().kind != TokenType::TokenEOF
+        {
+            self.advance();
+        }
+        if self.current_token().kind == TokenType::TokenSemicolon {
+            self.advance();
+        }
+    }
+
     pub fn parse_statement(&mut self) -> Statement {
         if self.current_token().is_type() {
-            return self.parse_declaration().expect("Expected declaration");
+            return self.parse_declaration();
         }
 
         match self.current_token().kind {
@@ -289,33 +307,49 @@ impl<'a> Parser<'a> {
         base
     }
 
-    fn parse_declaration(&mut self) -> Option<Statement> {
+    fn parse_declaration(&mut self) -> Statement {
         let var_type = self.parse_type();
 
         let variable = match &self.current_token().kind {
             TokenType::TokenIdentifier(sym) => *sym,
-            _ => panic!("Expected variable name"),
+            _ => {
+                self.errors.push(CompileError {
+                    message: "Expected a variable name".into(),
+                    span: self.current_token().span,
+                });
+                self.synchronize();
+                return Statement::Error;
+            }
         };
         self.advance();
 
         if self.current_token().kind != TokenType::TokenAssign {
             if self.current_token().kind != TokenType::TokenSemicolon {
-                panic!("Expected '=' or ';'");
+                self.errors.push(CompileError {
+                    message: "Expected '=' or ';'".into(),
+                    span: self.current_token().span,
+                });
+                self.synchronize();
+                return Statement::Error;
             }
             self.advance(); // ;
 
-            return Some(Statement::ShortDeclaration(var_type, variable));
+            return Statement::ShortDeclaration(var_type, variable);
         }
         self.advance(); // =
 
         let variable_value = self.parse_expression(0);
 
         if self.current_token().kind != TokenType::TokenSemicolon {
-            panic!("Missing semicolon at the end of the statement");
+            self.errors.push(CompileError {
+                message: "Missing semicolon at the end of the statement".into(),
+                span: self.current_token().span,
+            });
+            return Statement::Error;
         }
         self.advance(); // ;
 
-        Some(Statement::Declaration(var_type, variable, variable_value))
+        Statement::Declaration(var_type, variable, variable_value)
     }
 
     fn parse_function_declaration_arg(&mut self) -> (Type, Symbol) {
@@ -1714,6 +1748,7 @@ mod test {
         let _ast = parser.parse_expression(0);
     }
 
+    // DECLARATION
     #[test]
     fn test_declaration() {
         let mut interner = Interner::new();
@@ -1751,14 +1786,73 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Missing semicolon at the end of the statement")]
-    fn declaration_missing_semicolon() {
+    fn test_short_declaration_missing_semicolon() {
+        let mut interner = Interner::new();
+        let input = "i64 foo";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected '=' or ';'".into())
+    }
+
+    #[test]
+    fn test_declaration_missing_semicolon() {
         let mut interner = Interner::new();
         let input = "i64 bar = 132+123";
         let mut lexer = Lexer::init_lexer(input, &mut interner);
         let mut parser = Parser::init_parser(&mut lexer);
 
-        let _ast = parser.parse_statement();
+        let ast = parser.parse_statement();
+        assert_eq!(ast, Statement::Error);
+
+        let err = parser.errors.first().unwrap().message.clone();
+        assert_eq!(err, "Missing semicolon at the end of the statement".into())
+    }
+
+    #[test]
+    fn test_declaration_missing_assign_token() {
+        let mut interner = Interner::new();
+        let input = "i64 bar  132+123";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+        assert_eq!(ast, Statement::Error);
+
+        let err = parser.errors.first().unwrap().message.clone();
+        assert_eq!(err, "Expected '=' or ';'".into())
+    }
+
+    #[test]
+    fn test_declaration_missing_variable_name() {
+        let mut interner = Interner::new();
+        let input = "i64 = 132+123;i64 bar = 132+123;";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast1 = parser.parse_statement();
+        let ast2 = parser.parse_statement();
+
+        let expected_statement2 = Statement::Declaration(
+            Type::I64,
+            Symbol(0),
+            Expr::Binary(
+                Box::new(Expr::Int(132)),
+                BinaryOp::Add,
+                Box::new(Expr::Int(123)),
+            ),
+        );
+
+        let err1 = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast1, Statement::Error);
+        assert_eq!(err1, "Expected a variable name".into());
+        assert_eq!(ast2, expected_statement2);
     }
 
     #[test]
