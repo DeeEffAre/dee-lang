@@ -259,7 +259,7 @@ impl<'a> Parser<'a> {
         }
 
         match self.current_token().kind {
-            TokenType::TokenOpenBrace => self.parse_block().expect("Expected block"), // TODO: proper error handling
+            TokenType::TokenOpenBrace => self.parse_block(),
             TokenType::TokenIf => self.parse_if().expect("Expected if block"),
             TokenType::TokenWhile => self.parse_while().expect("Expected while block"),
             TokenType::TokenDo => self.parse_do_while().expect("Expected return statement"),
@@ -637,7 +637,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn parse_block(&mut self) -> Option<Statement> {
+    fn parse_block(&mut self) -> Statement {
         self.advance(); // {
 
         let mut statements = vec![];
@@ -648,11 +648,15 @@ impl<'a> Parser<'a> {
         }
 
         if self.current_token().kind == TokenType::TokenEOF {
-            return None;
+            self.errors.push(CompileError {
+                message: "Expected '}'".into(),
+                span: self.current_token().span,
+            });
+            return Statement::Error;
         }
 
         self.advance(); // }
-        Some(Statement::Block(statements))
+        Statement::Block(statements)
     }
 
     fn parse_if(&mut self) -> Option<Statement> {
@@ -1357,6 +1361,7 @@ mod test {
         assert_eq!(ast, expected_expression);
     }
 
+    // BLOCK
     #[test]
     fn test_block() {
         let mut interner = Interner::new();
@@ -1377,6 +1382,21 @@ mod test {
         ))]);
 
         assert_eq!(ast, expected_expression);
+    }
+
+    #[test]
+    fn test_block_missing_closing_brace() {
+        let mut interner = Interner::new();
+        let input = "{foo=2*3;";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected '}'".into());
     }
 
     #[test]
