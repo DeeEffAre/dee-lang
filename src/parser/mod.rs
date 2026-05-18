@@ -261,7 +261,7 @@ impl<'a> Parser<'a> {
         match self.current_token().kind {
             TokenType::TokenOpenBrace => self.parse_block(),
             TokenType::TokenIf => self.parse_if(),
-            TokenType::TokenWhile => self.parse_while().expect("Expected while block"),
+            TokenType::TokenWhile => self.parse_while(),
             TokenType::TokenDo => self.parse_do_while().expect("Expected return statement"),
             TokenType::TokenReturn => self.parse_return().expect("Expected return statement"),
             TokenType::TokenFunc | TokenType::TokenStatic => self
@@ -709,24 +709,52 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_while(&mut self) -> Option<Statement> {
+    fn parse_while(&mut self) -> Statement {
         self.advance(); // while
 
         if self.current_token().kind != TokenType::TokenOpenParen {
-            return None;
+            self.errors.push(CompileError {
+                message: "Expected '('".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
         }
         self.advance(); // (
 
+        if self.current_token().kind == TokenType::TokenCloseParen {
+            self.errors.push(CompileError {
+                message: "Empty while condition".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
+        }
+
         let cond = self.parse_expression(0);
 
-        if self.current_token().kind == TokenType::TokenEOF {
-            return None;
+        if self.current_token().kind != TokenType::TokenCloseParen {
+            self.errors.push(CompileError {
+                message: "Expected ')'".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
         }
         self.advance(); // )
 
+        if self.current_token().kind != TokenType::TokenOpenBrace {
+            self.errors.push(CompileError {
+                message: "Expected '}'".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
+        }
+
         let while_block = self.parse_statement();
 
-        Some(Statement::While(cond, Box::new(while_block)))
+        Statement::While(cond, Box::new(while_block))
     }
 
     fn parse_do_while(&mut self) -> Option<Statement> {
@@ -1609,6 +1637,7 @@ mod test {
         assert_eq!(ast, expected_expression);
     }
 
+    // WHILE
     #[test]
     fn test_while() {
         let mut interner = Interner::new();
@@ -1636,6 +1665,66 @@ mod test {
         );
 
         assert_eq!(ast, expected_expression);
+    }
+
+    #[test]
+    fn test_while_missing_open_paren() {
+        let mut interner = Interner::new();
+        let input = "while foo==bar){foo=2*3;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected '('".into());
+    }
+
+    #[test]
+    fn test_while_missing_close_paren() {
+        let mut interner = Interner::new();
+        let input = "while (foo==bar{foo=2*3;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected ')'".into());
+    }
+
+    #[test]
+    fn test_while_empty_condition() {
+        let mut interner = Interner::new();
+        let input = "while (){foo=2*3;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Empty while condition".into());
+    }
+
+    #[test]
+    fn test_while_missing_open_brace() {
+        let mut interner = Interner::new();
+        let input = "while (foo==bar)foo=2*3;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected '}'".into());
     }
 
     #[test]
