@@ -260,7 +260,7 @@ impl<'a> Parser<'a> {
 
         match self.current_token().kind {
             TokenType::TokenOpenBrace => self.parse_block(),
-            TokenType::TokenIf => self.parse_if().expect("Expected if block"),
+            TokenType::TokenIf => self.parse_if(),
             TokenType::TokenWhile => self.parse_while().expect("Expected while block"),
             TokenType::TokenDo => self.parse_do_while().expect("Expected return statement"),
             TokenType::TokenReturn => self.parse_return().expect("Expected return statement"),
@@ -659,38 +659,53 @@ impl<'a> Parser<'a> {
         Statement::Block(statements)
     }
 
-    fn parse_if(&mut self) -> Option<Statement> {
+    fn parse_if(&mut self) -> Statement {
         self.advance(); // if 
 
         if self.current_token().kind != TokenType::TokenOpenParen {
-            return None;
+            self.errors.push(CompileError {
+                message: "Expected '('".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
         }
         self.advance(); // (
 
         let cond = self.parse_expression(0);
 
-        if self.current_token().kind == TokenType::TokenEOF {
-            return None;
+        if self.current_token().kind != TokenType::TokenCloseParen {
+            self.errors.push(CompileError {
+                message: "Expected ')'".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
         }
 
         self.advance(); // )
+
+        if self.current_token().kind != TokenType::TokenOpenBrace {
+            self.errors.push(CompileError {
+                message: "Expected '{'".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
+        }
 
         let if_block = self.parse_statement();
 
         if self.current_token().kind == TokenType::TokenElse {
             self.advance(); // else
             let else_branch = if self.current_token().kind == TokenType::TokenIf {
-                self.parse_if().expect("expected if after else") // else if
+                self.parse_if()
             } else {
                 self.parse_statement()
             };
-            Some(Statement::If(
-                cond,
-                Box::new(if_block),
-                Some(Box::new(else_branch)),
-            ))
+            Statement::If(cond, Box::new(if_block), Some(Box::new(else_branch)))
         } else {
-            Some(Statement::If(cond, Box::new(if_block), None))
+            Statement::If(cond, Box::new(if_block), None)
         }
     }
 
@@ -1432,6 +1447,7 @@ mod test {
         assert_eq!(ast, expected_expression);
     }
 
+    // IF
     #[test]
     fn test_if() {
         let mut interner = Interner::new();
@@ -1460,6 +1476,51 @@ mod test {
         );
 
         assert_eq!(ast, expected_expression);
+    }
+
+    #[test]
+    fn test_if_missing_open_paren() {
+        let mut interner = Interner::new();
+        let input = "if foo == bar){foo=2*3;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected '('".into())
+    }
+
+    #[test]
+    fn test_if_missing_close_paren() {
+        let mut interner = Interner::new();
+        let input = "if (foo == bar{foo=2*3;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected ')'".into())
+    }
+
+    #[test]
+    fn test_if_missing_open_brace() {
+        let mut interner = Interner::new();
+        let input = "if (foo == bar)foo=2*3;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected '{'".into())
     }
 
     #[test]
