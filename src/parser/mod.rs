@@ -263,7 +263,7 @@ impl<'a> Parser<'a> {
             TokenType::TokenIf => self.parse_if(),
             TokenType::TokenWhile => self.parse_while(),
             TokenType::TokenDo => self.parse_do_while(),
-            TokenType::TokenReturn => self.parse_return().expect("Expected return statement"),
+            TokenType::TokenReturn => self.parse_return(),
             TokenType::TokenFunc | TokenType::TokenStatic => self
                 .parse_function_declaration()
                 .expect("Expected a function declaration"),
@@ -815,16 +815,20 @@ impl<'a> Parser<'a> {
         Statement::DoWhile(Box::new(do_block), cond)
     }
 
-    fn parse_return(&mut self) -> Option<Statement> {
+    fn parse_return(&mut self) -> Statement {
         self.advance(); // return
         let return_expr = self.parse_expression(0);
 
         if self.current_token().kind != TokenType::TokenSemicolon {
-            panic!("Missing semicolon at the end of the statement"); // TODO: proper error handling
+            self.errors.push(CompileError {
+                message: "Missing semicolon at the end of the statement".into(),
+                span: self.current_token().span,
+            });
+            return Statement::Error;
         }
         self.advance(); // ;
 
-        Some(Statement::Return(Some(return_expr)))
+        Statement::Return(Some(return_expr))
     }
 
     fn parse_primary(&mut self) -> Option<Expr> {
@@ -1865,6 +1869,7 @@ mod test {
         assert_eq!(err, "Empty while condition".into());
     }
 
+    // RETURN
     #[test]
     fn test_return() {
         let mut interner = Interner::new();
@@ -1881,6 +1886,21 @@ mod test {
         )));
 
         assert_eq!(ast, expected_expression);
+    }
+
+    #[test]
+    fn test_return_missing_semicolon() {
+        let mut interner = Interner::new();
+        let input = "return foo+1";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Missing semicolon at the end of the statement".into())
     }
 
     #[test]
