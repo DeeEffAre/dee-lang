@@ -264,9 +264,7 @@ impl<'a> Parser<'a> {
             TokenType::TokenWhile => self.parse_while(),
             TokenType::TokenDo => self.parse_do_while(),
             TokenType::TokenReturn => self.parse_return(),
-            TokenType::TokenFunc | TokenType::TokenStatic => self
-                .parse_function_declaration()
-                .expect("Expected a function declaration"),
+            TokenType::TokenFunc | TokenType::TokenStatic => self.parse_function_declaration(),
             TokenType::TokenStruct => self.parse_struct_definition().expect("Expected a struct"),
             TokenType::TokenDefer => self.parse_defer().expect("Expected a defer statement"),
             TokenType::TokenFor => self.parse_for().expect("Expected a for loop"),
@@ -352,60 +350,111 @@ impl<'a> Parser<'a> {
         Statement::Declaration(var_type, variable, variable_value)
     }
 
-    fn parse_function_declaration_arg(&mut self) -> (Type, Symbol) {
+    fn parse_function_declaration_arg(&mut self) -> Result<FunctionArg, String> {
+        if !self.current_token().is_type() {
+            return Err("Missing or invalid type in function argument".to_string());
+        }
+
         let arg_type = self.parse_type();
         let arg_symbol = match &self.current_token().kind {
             TokenType::TokenIdentifier(sym) => *sym,
-            _ => panic!("Expected argument name"), // TODO: proper error handling
+            _ => return Err("Missing or invalid argument name".to_string()),
         };
         self.advance();
 
-        (arg_type, arg_symbol)
+        Ok(FunctionArg {
+            ty: arg_type,
+            name: arg_symbol,
+        })
     }
 
-    fn parse_function_declaration(&mut self) -> Option<Statement> {
+    fn parse_function_declaration(&mut self) -> Statement {
         let mut static_modifier = false;
         if self.current_token().kind == TokenType::TokenStatic {
             static_modifier = true;
             self.advance(); // static
         }
 
+        if self.current_token().kind != TokenType::TokenFunc {
+            self.errors.push(CompileError {
+                message: "Expected 'func' keyword".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
+        }
         self.advance(); // func
 
+        if !self.current_token().is_type() {
+            self.errors.push(CompileError {
+                message: "Expected a type".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
+        }
         let return_type = self.parse_type();
 
         let function_name = match &self.current_token().kind {
             TokenType::TokenIdentifier(sym) => *sym,
-            _ => panic!("Expected function name"),
+            _ => {
+                self.errors.push(CompileError {
+                    message: "Expected a function name".into(),
+                    span: self.current_token().span,
+                });
+                self.synchronize();
+                return Statement::Error;
+            }
         };
         self.advance();
 
         if self.current_token().kind != TokenType::TokenOpenParen {
-            panic!("Expected '('") // TODO: proper error handling
+            self.errors.push(CompileError {
+                message: "Expected '('".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
         }
         self.advance(); // (
 
         let mut args = vec![];
         while self.current_token().kind != TokenType::TokenCloseParen {
-            let (arg_type, arg_symbol) = self.parse_function_declaration_arg();
-
-            args.push(FunctionArg {
-                ty: arg_type,
-                name: arg_symbol,
-            });
+            match self.parse_function_declaration_arg() {
+                Ok(arg) => args.push(arg),
+                Err(err) => {
+                    self.errors.push(CompileError {
+                        message: err.into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Statement::Error;
+                }
+            }
 
             while self.current_token().kind == TokenType::TokenComma {
                 self.advance();
-                let (arg_type, arg_symbol) = self.parse_function_declaration_arg();
-                args.push(FunctionArg {
-                    ty: arg_type,
-                    name: arg_symbol,
-                });
+                match self.parse_function_declaration_arg() {
+                    Ok(arg) => args.push(arg),
+                    Err(err) => {
+                        self.errors.push(CompileError {
+                            message: err.into(),
+                            span: self.current_token().span,
+                        });
+                        self.synchronize();
+                        return Statement::Error;
+                    }
+                }
             }
         }
 
         if self.current_token().kind != TokenType::TokenCloseParen {
-            panic!("Expected ')'"); // TODO: proper error handling
+            self.errors.push(CompileError {
+                message: "Expected ')'".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
         }
         self.advance();
 
@@ -415,7 +464,14 @@ impl<'a> Parser<'a> {
 
             let symbol = match &self.current_token().kind {
                 TokenType::TokenIdentifier(sym) => *sym,
-                _ => panic!("Expected function name"),
+                _ => {
+                    self.errors.push(CompileError {
+                        message: "Expected a struct name for method binding".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Statement::Error;
+                }
             };
             self.advance();
 
@@ -424,16 +480,25 @@ impl<'a> Parser<'a> {
             None
         };
 
+        if self.current_token().kind != TokenType::TokenOpenBrace {
+            self.errors.push(CompileError {
+                message: "Expected '{'".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
+        }
+
         let function_block = self.parse_statement();
 
-        Some(Statement::FunctionDeclaration(
+        Statement::FunctionDeclaration(
             static_modifier,
             return_type,
             function_name,
             args,
             binded_struct,
             Box::new(function_block),
-        ))
+        )
     }
 
     fn parse_struct_definition(&mut self) -> Option<Statement> {
@@ -2177,6 +2242,7 @@ mod test {
         assert_eq!(ast, expected_statement);
     }
 
+    // FUNCTION DECLARATION
     #[test]
     fn test_function_declaration_without_method_binding() {
         let mut interner = Interner::new();
@@ -2328,6 +2394,149 @@ mod test {
         );
 
         assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_function_declaration_missing_func_keyword() {
+        let mut interner = Interner::new();
+        let input = "static i64 sum() -> Parser {return 1 + 1;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected 'func' keyword".into());
+    }
+
+    #[test]
+    fn test_function_declaration_missing_return_type() {
+        let mut interner = Interner::new();
+        let input = "static func sum() -> Parser {return 1 + 1;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected a type".into());
+    }
+
+    #[test]
+    fn test_function_declaration_missing_function_name() {
+        let mut interner = Interner::new();
+        let input = "static func i64 () -> Parser {return 1 + 1;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected a function name".into());
+    }
+
+    #[test]
+    fn test_function_declaration_missing_open_paren() {
+        let mut interner = Interner::new();
+        let input = "static func i64 sum ) -> Parser {return 1 + 1;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected '('".into());
+    }
+
+    #[test]
+    fn test_function_declaration_unvalid_function_argument() {
+        let mut interner = Interner::new();
+        let input = "static func i64 sum(bar foo) -> Parser {return 1 + 1;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Missing or invalid type in function argument".into());
+    }
+
+    #[test]
+    fn test_function_declaration_missing_close_paren1() {
+        let mut interner = Interner::new();
+        let input = "static func i64 sum( -> Parser {return 1 + 1;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+
+        // WARN: I cannot solve it. i may have to rewrite function declaration parser or may need
+        // backtracking ability in Parser which will require me to refactor lexer-parser binding,
+        // Lexer should create a vector of tokens then i should pass that vector into Parser and not
+        // Lexer itself
+        // assert_eq!(err, "Expected ')'".into());
+        assert_eq!(err, "Missing or invalid type in function argument".into());
+    }
+
+    #[test]
+    fn test_function_declaration_missing_close_paren2() {
+        let mut interner = Interner::new();
+        let input = "static func i64 sum(i64 bar -> Parser {return 1 + 1;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+
+        // assert_eq!(err, "Expected ')'".into());
+        assert_eq!(err, "Missing or invalid type in function argument".into());
+    }
+
+    #[test]
+    fn test_function_declaration_missing_struct_name_for_method_binding() {
+        let mut interner = Interner::new();
+        let input = "static func i64 sum() -> {return 1 + 1;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected a struct name for method binding".into());
+    }
+
+    #[test]
+    fn test_function_declaration_missing_open_brace() {
+        let mut interner = Interner::new();
+        let input = "static func i64 sum() -> Parser return 1 + 1;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected '{'".into());
     }
 
     #[test]
