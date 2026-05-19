@@ -265,7 +265,7 @@ impl<'a> Parser<'a> {
             TokenType::TokenDo => self.parse_do_while(),
             TokenType::TokenReturn => self.parse_return(),
             TokenType::TokenFunc | TokenType::TokenStatic => self.parse_function_declaration(),
-            TokenType::TokenStruct => self.parse_struct_definition().expect("Expected a struct"),
+            TokenType::TokenStruct => self.parse_struct_definition(),
             TokenType::TokenDefer => self.parse_defer().expect("Expected a defer statement"),
             TokenType::TokenFor => self.parse_for().expect("Expected a for loop"),
             TokenType::TokenContinue => {
@@ -288,25 +288,38 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_type(&mut self) -> Type {
-        let base = Type::from_token(self.current_token()).expect("Expected type");
+    fn parse_type(&mut self) -> Result<Type, String> {
+        let base = match Type::from_token(self.current_token()) {
+            Some(t) => t,
+            None => return Err("Missing or invalid type".to_string()),
+        };
         self.advance();
 
         // FixArray check
         if self.current_token().kind == TokenType::TokenOpenSquare {
             self.advance(); // [
             if self.current_token().kind != TokenType::TokenCloseSquare {
-                panic!("Expected ']' in array type");
+                return Err("Expected ']' in array type".to_string());
             }
             self.advance(); // ]
-            return Type::FixArray(Box::new(base));
+            return Ok(Type::FixArray(Box::new(base)));
         }
 
-        base
+        Ok(base)
     }
 
     fn parse_declaration(&mut self) -> Statement {
-        let var_type = self.parse_type();
+        let var_type = match self.parse_type() {
+            Ok(t) => t,
+            Err(err) => {
+                self.errors.push(CompileError {
+                    message: err.into(),
+                    span: self.current_token().span,
+                });
+                self.synchronize();
+                return Statement::Error;
+            }
+        };
 
         let variable = match &self.current_token().kind {
             TokenType::TokenIdentifier(sym) => *sym,
@@ -355,7 +368,8 @@ impl<'a> Parser<'a> {
             return Err("Missing or invalid type in function argument".to_string());
         }
 
-        let arg_type = self.parse_type();
+        let arg_type = self.parse_type()?;
+
         let arg_symbol = match &self.current_token().kind {
             TokenType::TokenIdentifier(sym) => *sym,
             _ => return Err("Missing or invalid argument name".to_string()),
@@ -393,7 +407,17 @@ impl<'a> Parser<'a> {
             self.synchronize();
             return Statement::Error;
         }
-        let return_type = self.parse_type();
+        let return_type = match self.parse_type() {
+            Ok(t) => t,
+            Err(err) => {
+                self.errors.push(CompileError {
+                    message: err.into(),
+                    span: self.current_token().span,
+                });
+                self.synchronize();
+                return Statement::Error;
+            }
+        };
 
         let function_name = match &self.current_token().kind {
             TokenType::TokenIdentifier(sym) => *sym,
@@ -501,17 +525,29 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_struct_definition(&mut self) -> Option<Statement> {
+    fn parse_struct_definition(&mut self) -> Statement {
         self.advance(); // struct
 
         let struct_name = match &self.current_token().kind {
             TokenType::TokenIdentifier(sym) => *sym,
-            _ => panic!("Expected struct name"), // TODO: proper error handling
+            _ => {
+                self.errors.push(CompileError {
+                    message: "Expected a struct name".into(),
+                    span: self.current_token().span,
+                });
+                self.synchronize();
+                return Statement::Error;
+            }
         };
         self.advance();
 
         if self.current_token().kind != TokenType::TokenOpenBrace {
-            panic!("Expected '{{'") // TODO: proper error handling
+            self.errors.push(CompileError {
+                message: "Expected '{'".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
         }
         self.advance(); // {
 
@@ -519,28 +555,53 @@ impl<'a> Parser<'a> {
         while self.current_token().kind != TokenType::TokenCloseBrace
             && self.current_token().kind != TokenType::TokenEOF
         {
-            let field_type = self.parse_type();
+            let field_type = match self.parse_type() {
+                Ok(t) => t,
+                Err(err) => {
+                    self.errors.push(CompileError {
+                        message: err.into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Statement::Error;
+                }
+            };
+
             let field_name = match &self.current_token().kind {
                 TokenType::TokenIdentifier(sym) => *sym,
-                _ => panic!("Expected field name"), // TODO: proper error handling
+                _ => {
+                    self.errors.push(CompileError {
+                        message: "Expected a field name".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Statement::Error;
+                }
             };
             self.advance();
 
             if self.current_token().kind != TokenType::TokenSemicolon {
-                panic!("Expected ';'") // TODO: proper error handling
+                self.errors.push(CompileError {
+                    message: "Expected ';'".into(),
+                    span: self.current_token().span,
+                });
+                return Statement::Error;
             }
             self.advance();
 
             type_field_pairs.push((field_type, field_name));
         }
 
-        if self.current_token().kind == TokenType::TokenEOF {
-            panic!("Expected '}}'") // TODO: proper error handling
+        if self.current_token().kind != TokenType::TokenCloseBrace {
+            self.errors.push(CompileError {
+                message: "Expected '}'".into(),
+                span: self.current_token().span,
+            });
+            return Statement::Error;
         }
-
         self.advance(); // }
 
-        Some(Statement::Struct(struct_name, type_field_pairs))
+        Statement::Struct(struct_name, type_field_pairs)
     }
 
     fn parse_pattern(&mut self) -> Pattern {
@@ -2539,6 +2600,7 @@ mod test {
         assert_eq!(err, "Expected '{'".into());
     }
 
+    // STRUCT DEFINITION
     #[test]
     fn test_struct_definition() {
         let mut interner = Interner::new();
@@ -2554,6 +2616,96 @@ mod test {
         );
 
         assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_struct_definition_missing_struct_name() {
+        let mut interner = Interner::new();
+        let input = "struct {usize position; string input;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected a struct name".into());
+    }
+
+    #[test]
+    fn test_struct_definition_missing_open_brace() {
+        let mut interner = Interner::new();
+        let input = "struct Lexer usize position; string input;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected '{'".into());
+    }
+
+    #[test]
+    fn test_struct_definition_missing_type() {
+        let mut interner = Interner::new();
+        let input = "struct Lexer {position; string input;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Missing or invalid type".into());
+    }
+
+    #[test]
+    fn test_struct_definition_missing_field_name() {
+        let mut interner = Interner::new();
+        let input = "struct Lexer {usize; string input;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected a field name".into());
+    }
+
+    #[test]
+    fn test_struct_definition_missing_semicolon() {
+        let mut interner = Interner::new();
+        let input = "struct Lexer {usize position string input;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected ';'".into());
+    }
+
+    #[test]
+    fn test_struct_definition_missing_close_brace() {
+        let mut interner = Interner::new();
+        let input = "struct Lexer {usize position; string input;";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Error);
+        assert_eq!(err, "Expected '}'".into());
     }
 
     #[test]
