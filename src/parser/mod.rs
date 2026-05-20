@@ -266,8 +266,8 @@ impl<'a> Parser<'a> {
             TokenType::TokenReturn => self.parse_return(),
             TokenType::TokenFunc | TokenType::TokenStatic => self.parse_function_declaration(),
             TokenType::TokenStruct => self.parse_struct_definition(),
-            TokenType::TokenDefer => self.parse_defer().expect("Expected a defer statement"),
-            TokenType::TokenFor => self.parse_for().expect("Expected a for loop"),
+            TokenType::TokenDefer => self.parse_defer(),
+            TokenType::TokenFor => self.parse_for(),
             TokenType::TokenContinue => {
                 self.advance(); // continue
                 self.advance(); // ;
@@ -721,19 +721,24 @@ impl<'a> Parser<'a> {
         Some(Expr::Match(Box::new(eval_expr), arms))
     }
 
-    fn parse_defer(&mut self) -> Option<Statement> {
+    fn parse_defer(&mut self) -> Statement {
         self.advance(); // defer
 
         let defer_statement = self.parse_statement();
 
-        Some(Statement::Defer(Box::new(defer_statement)))
+        Statement::Defer(Box::new(defer_statement))
     }
 
-    fn parse_for(&mut self) -> Option<Statement> {
+    fn parse_for(&mut self) -> Statement {
         self.advance(); // for
 
         if self.current_token().kind != TokenType::TokenOpenParen {
-            panic!("Expected '('"); // TODO: proper error handling
+            self.errors.push(CompileError {
+                message: "Expected '('".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
         }
         self.advance(); // (
 
@@ -742,25 +747,44 @@ impl<'a> Parser<'a> {
         let for_condition = self.parse_expression(0);
 
         if self.current_token().kind != TokenType::TokenSemicolon {
-            panic!("Expected ';'"); // TODO: proper error handling
+            self.errors.push(CompileError {
+                message: "Expected ';'".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
         }
         self.advance(); // ;
 
         let for_step = self.parse_expression(0);
 
         if self.current_token().kind != TokenType::TokenCloseParen {
-            panic!("Expected ')'"); // TODO: proper error handling
+            self.errors.push(CompileError {
+                message: "Expected ')'".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
         }
         self.advance(); // )
 
+        if self.current_token().kind != TokenType::TokenOpenBrace {
+            self.errors.push(CompileError {
+                message: "Expected '{'".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Statement::Error;
+        }
+
         let for_block = self.parse_statement();
 
-        Some(Statement::For(
+        Statement::For(
             Box::new(for_declaration),
             for_condition,
             for_step,
             Box::new(for_block),
-        ))
+        )
     }
 
     fn parse_block(&mut self) -> Statement {
@@ -2933,6 +2957,7 @@ mod test {
         assert_eq!(ast1, expected_statement);
     }
 
+    // FOR
     #[test]
     fn test_for_loop() {
         let mut interner = Interner::new();
@@ -2964,5 +2989,65 @@ mod test {
         );
 
         assert_eq!(ast1, expected_statement);
+    }
+
+    #[test]
+    fn test_for_loop_missing_open_paren() {
+        let mut interner = Interner::new();
+        let input = "for i32 i = 0; i < 10; i += 1) {printf(i);continue;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast1 = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast1, Statement::Error);
+        assert_eq!(err, "Expected '('".into());
+    }
+
+    #[test]
+    fn test_for_loop_missing_semicolon_after_condition() {
+        let mut interner = Interner::new();
+        let input = "for (i32 i = 0; i < 10 i += 1) {printf(i);continue;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast1 = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast1, Statement::Error);
+        assert_eq!(err, "Expected ';'".into());
+    }
+
+    #[test]
+    fn test_for_loop_missing_close_paren() {
+        let mut interner = Interner::new();
+        let input = "for (i32 i = 0; i < 10; i += 1 {printf(i);continue;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast1 = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast1, Statement::Error);
+        assert_eq!(err, "Expected ')'".into());
+    }
+
+    #[test]
+    fn test_for_loop_missing_open_brace() {
+        let mut interner = Interner::new();
+        let input = "for (i32 i = 0; i < 10; i += 1) printf(i);continue;}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast1 = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast1, Statement::Error);
+        assert_eq!(err, "Expected '{'".into());
     }
 }
