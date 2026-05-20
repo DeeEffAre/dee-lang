@@ -253,6 +253,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // May return Statement::Error due to parse_block, check for it when expecting a block statement
     pub fn parse_statement(&mut self) -> Statement {
         if self.current_token().is_type() {
             return self.parse_declaration();
@@ -270,11 +271,27 @@ impl<'a> Parser<'a> {
             TokenType::TokenFor => self.parse_for(),
             TokenType::TokenContinue => {
                 self.advance(); // continue
+
+                if self.current_token().kind != TokenType::TokenSemicolon {
+                    self.errors.push(CompileError {
+                        message: "Expected ';'".into(),
+                        span: self.current_token().span,
+                    });
+                    return Statement::Error;
+                }
                 self.advance(); // ;
                 Statement::Continue
             }
             TokenType::TokenBreak => {
                 self.advance(); // break
+
+                if self.current_token().kind != TokenType::TokenSemicolon {
+                    self.errors.push(CompileError {
+                        message: "Expected ';'".into(),
+                        span: self.current_token().span,
+                    });
+                    return Statement::Error;
+                }
                 self.advance(); // ;
                 Statement::Break
             }
@@ -514,6 +531,9 @@ impl<'a> Parser<'a> {
         }
 
         let function_block = self.parse_statement();
+        if function_block == Statement::Error {
+            return Statement::Error;
+        }
 
         Statement::FunctionDeclaration(
             static_modifier,
@@ -778,6 +798,9 @@ impl<'a> Parser<'a> {
         }
 
         let for_block = self.parse_statement();
+        if for_block == Statement::Error {
+            return Statement::Error;
+        }
 
         Statement::For(
             Box::new(for_declaration),
@@ -787,6 +810,7 @@ impl<'a> Parser<'a> {
         )
     }
 
+    // May return Statement::Error
     fn parse_block(&mut self) -> Statement {
         self.advance(); // {
 
@@ -794,7 +818,12 @@ impl<'a> Parser<'a> {
         while self.current_token().kind != TokenType::TokenCloseBrace
             && self.current_token().kind != TokenType::TokenEOF
         {
-            statements.push(self.parse_statement());
+            let statement = self.parse_statement();
+            if statement == Statement::Error {
+                return Statement::Error;
+            } else {
+                statements.push(statement);
+            }
         }
 
         if self.current_token().kind == TokenType::TokenEOF {
@@ -845,6 +874,9 @@ impl<'a> Parser<'a> {
         }
 
         let if_block = self.parse_statement();
+        if if_block == Statement::Error {
+            return Statement::Error;
+        }
 
         if self.current_token().kind == TokenType::TokenElse {
             self.advance(); // else
@@ -903,6 +935,9 @@ impl<'a> Parser<'a> {
         }
 
         let while_block = self.parse_statement();
+        if while_block == Statement::Error {
+            return Statement::Error;
+        }
 
         Statement::While(cond, Box::new(while_block))
     }
@@ -920,6 +955,9 @@ impl<'a> Parser<'a> {
         }
 
         let do_block = self.parse_statement();
+        if do_block == Statement::Error {
+            return Statement::Error;
+        }
 
         if self.current_token().kind != TokenType::TokenWhile {
             self.errors.push(CompileError {
@@ -3049,5 +3087,20 @@ mod test {
 
         assert_eq!(ast1, Statement::Error);
         assert_eq!(err, "Expected '{'".into());
+    }
+
+    #[test]
+    fn test_for_loop_missing_semicolon_after_continue_keyword() {
+        let mut interner = Interner::new();
+        let input = "for (i32 i = 0; i < 10; i += 1) {printf(i);continue}";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast1 = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast1, Statement::Error);
+        assert_eq!(err, "Expected ';'".into());
     }
 }
