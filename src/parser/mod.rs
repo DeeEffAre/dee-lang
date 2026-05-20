@@ -297,9 +297,15 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 let expr = self.parse_expression(0);
-                if matches!(self.current_token().kind, TokenType::TokenSemicolon) {
+
+                if self.current_token().kind == TokenType::TokenSemicolon {
                     self.advance();
                 }
+
+                if expr == Expr::Error {
+                    return Statement::Expr(Expr::Error);
+                }
+
                 Statement::Expr(expr)
             }
         }
@@ -624,91 +630,156 @@ impl<'a> Parser<'a> {
         Statement::Struct(struct_name, type_field_pairs)
     }
 
-    fn parse_pattern(&mut self) -> Pattern {
+    // Check for None and don't push any other error
+    fn parse_pattern(&mut self) -> Option<Pattern> {
         match &self.current_token().kind {
             TokenType::TokenUnderscore => {
                 self.advance();
-                Pattern::Wildcard
+                Some(Pattern::Wildcard)
             }
             TokenType::TokenNone => {
                 self.advance();
-                Pattern::None
+                Some(Pattern::None)
             }
             TokenType::TokenSome => {
                 self.advance();
+
                 if self.current_token().kind != TokenType::TokenOpenParen {
-                    panic!("Expected '(' after Some");
+                    self.errors.push(CompileError {
+                        message: "Expected '(' after Some".into(),
+                        span: self.current_token().span,
+                    });
+                    return None;
                 }
                 self.advance(); // (
-                let inner = self.parse_pattern();
+
+                let inner = self.parse_pattern()?;
+
                 if self.current_token().kind != TokenType::TokenCloseParen {
-                    panic!("Expected ')' after Some pattern");
+                    self.errors.push(CompileError {
+                        message: "Expected ')' after Some".into(),
+                        span: self.current_token().span,
+                    });
+                    return None;
                 }
                 self.advance(); // )
-                Pattern::Some(Box::new(inner))
+
+                Some(Pattern::Some(Box::new(inner)))
             }
             TokenType::TokenOk => {
                 self.advance();
+
                 if self.current_token().kind != TokenType::TokenOpenParen {
-                    panic!("Expected '(' after Some");
+                    self.errors.push(CompileError {
+                        message: "Expected '(' after Ok pattern".into(),
+                        span: self.current_token().span,
+                    });
+                    return None;
                 }
                 self.advance(); // (
-                let inner = self.parse_pattern();
+
+                let inner = self.parse_pattern()?;
+
                 if self.current_token().kind != TokenType::TokenCloseParen {
-                    panic!("Expected ')' after Some pattern");
+                    self.errors.push(CompileError {
+                        message: "Expected ')' after Ok pattern".into(),
+                        span: self.current_token().span,
+                    });
+                    return None;
                 }
                 self.advance(); // )
-                Pattern::Ok(Box::new(inner))
+
+                Some(Pattern::Ok(Box::new(inner)))
             }
             TokenType::TokenErr => {
                 self.advance();
+
                 if self.current_token().kind != TokenType::TokenOpenParen {
-                    panic!("Expected '(' after Some");
+                    self.errors.push(CompileError {
+                        message: "Expected '(' after Err pattern".into(),
+                        span: self.current_token().span,
+                    });
+                    return None;
                 }
                 self.advance(); // (
-                let inner = self.parse_pattern();
+
+                let inner = self.parse_pattern()?;
+
                 if self.current_token().kind != TokenType::TokenCloseParen {
-                    panic!("Expected ')' after Some pattern");
+                    self.errors.push(CompileError {
+                        message: "Expected ')' after Err pattern".into(),
+                        span: self.current_token().span,
+                    });
+                    return None;
                 }
                 self.advance(); // )
-                Pattern::Err(Box::new(inner))
+
+                Some(Pattern::Err(Box::new(inner)))
             }
             TokenType::TokenIdentifier(sym) => {
                 let sym = *sym;
                 self.advance();
                 if self.current_token().kind == TokenType::TokenOpenParen {
                     self.advance(); // (
-                    let inner = self.parse_pattern();
+
+                    let inner = self.parse_pattern()?;
+
                     if self.current_token().kind != TokenType::TokenCloseParen {
-                        panic!("Expected ')' after variant pattern");
+                        self.errors.push(CompileError {
+                            message: "Expected ')' after variant pattern".into(),
+                            span: self.current_token().span,
+                        });
+                        return None;
                     }
                     self.advance(); // )
-                    Pattern::Variant(sym, Box::new(inner))
+
+                    Some(Pattern::Variant(sym, Box::new(inner)))
                 } else {
-                    Pattern::Binding(sym)
+                    Some(Pattern::Binding(sym))
                 }
             }
-            _ => panic!("Expected pattern"),
+            _ => {
+                self.errors.push(CompileError {
+                    message: "Expected pattern".into(),
+                    span: self.current_token().span,
+                });
+                None
+            }
         }
     }
 
-    fn parse_match(&mut self) -> Option<Expr> {
+    fn parse_match(&mut self) -> Expr {
         self.advance(); // match
 
         if self.current_token().kind != TokenType::TokenOpenParen {
-            panic!("Expected '('"); // TODO: proper error handling
+            self.errors.push(CompileError {
+                message: "Expected '('".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Expr::Error;
         }
         self.advance(); // (
 
         let eval_expr = self.parse_expression(0);
 
         if self.current_token().kind != TokenType::TokenCloseParen {
-            panic!("Expected ')'"); // TODO: proper error handling
+            self.errors.push(CompileError {
+                message: "Expected ')'".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Expr::Error;
         }
         self.advance(); // )
 
         if self.current_token().kind != TokenType::TokenOpenBrace {
-            panic!("Expected '{{'"); // TODO: proper error handling
+            self.errors.push(CompileError {
+                message: "Expected '{'".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Expr::Error;
         }
         self.advance(); // {
 
@@ -717,28 +788,51 @@ impl<'a> Parser<'a> {
             && self.current_token().kind != TokenType::TokenEOF
         {
             if self.current_token().kind != TokenType::TokenPipe {
-                panic!("Expected '|'"); // TODO: proper error handling
+                self.errors.push(CompileError {
+                    message: "Expected '|'".into(),
+                    span: self.current_token().span,
+                });
+                self.synchronize();
+                return Expr::Error;
             }
             self.advance(); // |
 
             let pattern = self.parse_pattern();
+            if pattern.is_none() {
+                self.synchronize();
+                return Expr::Error;
+            }
+            let pattern = pattern.unwrap();
 
             if self.current_token.kind != TokenType::TokenArrow {
-                panic!("Expected '->'"); // TODO: proper error handling
+                self.errors.push(CompileError {
+                    message: "Expected '->'".into(),
+                    span: self.current_token().span,
+                });
+                self.synchronize();
+                return Expr::Error;
             }
             self.advance(); // ->
 
             let arm_statement = self.parse_statement();
+            if arm_statement == Statement::Error {
+                return Expr::Error;
+            }
 
             arms.push((pattern, arm_statement));
         }
 
         if self.current_token().kind != TokenType::TokenCloseBrace {
-            panic!("Expected '}}'"); // TODO: proper error handling
+            self.errors.push(CompileError {
+                message: "Expected '}'".into(),
+                span: self.current_token().span,
+            });
+            self.synchronize();
+            return Expr::Error;
         }
         self.advance();
 
-        Some(Expr::Match(Box::new(eval_expr), arms))
+        Expr::Match(Box::new(eval_expr), arms)
     }
 
     fn parse_defer(&mut self) -> Statement {
@@ -1019,60 +1113,115 @@ impl<'a> Parser<'a> {
         Statement::Return(Some(return_expr))
     }
 
-    fn parse_primary(&mut self) -> Option<Expr> {
+    fn parse_primary(&mut self) -> Expr {
         let token = self.current_token();
 
         let expr = match token.kind {
-            TokenType::TokenIntConstant(val) => Some(Expr::Int(val)),
-            TokenType::TokenFloatConstant(val) => Some(Expr::Float(val)),
-            TokenType::TokenUIntConstant(val) => Some(Expr::Int(val as i64)),
+            TokenType::TokenIntConstant(val) => Expr::Int(val),
+            TokenType::TokenFloatConstant(val) => Expr::Float(val),
+            TokenType::TokenUIntConstant(val) => Expr::Int(val as i64),
             TokenType::TokenOpenParen => {
                 self.advance();
                 let inner = self.parse_expression(0);
-                if !(self.current_token().kind == TokenType::TokenCloseParen) {
-                    panic!("Expected ')'");
+                if inner == Expr::Error {
+                    self.errors.push(CompileError {
+                        message: "Expected a value".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Expr::Error;
                 }
-                Some(inner)
+
+                if !(self.current_token().kind == TokenType::TokenCloseParen) {
+                    self.errors.push(CompileError {
+                        message: "Expected ')'".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Expr::Error;
+                }
+                inner
             }
 
             // builtin variants
             TokenType::TokenNone => {
                 self.advance();
-                return Some(Expr::None);
+                return Expr::None;
             }
             TokenType::TokenOk => {
                 self.advance();
 
                 if self.current_token().kind != TokenType::TokenOpenParen {
-                    panic!("Expected '('"); // TODO: proper error handling
+                    self.errors.push(CompileError {
+                        message: "Expected '('".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Expr::Error;
                 }
-                let inner = self.parse_primary().expect("Expected value");
+                let inner = self.parse_primary();
+                if inner == Expr::Error {
+                    self.errors.push(CompileError {
+                        message: "Expected a value".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Expr::Error;
+                }
 
-                return Some(Expr::Ok(Box::new(inner)));
+                return Expr::Ok(Box::new(inner));
             }
             TokenType::TokenSome => {
                 self.advance();
 
                 if self.current_token().kind != TokenType::TokenOpenParen {
-                    panic!("Expected '('"); // TODO: proper error handling
+                    self.errors.push(CompileError {
+                        message: "Expected '('".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Expr::Error;
                 }
-                let inner = self.parse_primary().expect("Expected value");
 
-                return Some(Expr::Some(Box::new(inner)));
+                let inner = self.parse_primary();
+                if inner == Expr::Error {
+                    self.errors.push(CompileError {
+                        message: "Expected a value".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Expr::Error;
+                }
+
+                return Expr::Some(Box::new(inner));
             }
             TokenType::TokenErr => {
                 self.advance();
 
                 if self.current_token().kind != TokenType::TokenOpenParen {
-                    panic!("Expected '('"); // TODO: proper error handling
+                    self.errors.push(CompileError {
+                        message: "Expected '('".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Expr::Error;
                 }
-                let inner = self.parse_primary().expect("Expected value");
 
-                return Some(Expr::Err(Box::new(inner)));
+                let inner = self.parse_primary();
+                if inner == Expr::Error {
+                    self.errors.push(CompileError {
+                        message: "Expected a value".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Expr::Error;
+                }
+
+                return Expr::Err(Box::new(inner));
             }
 
-            TokenType::TokenIdentifier(sym) => Some(Expr::Ident(sym)),
-            _ => None,
+            TokenType::TokenIdentifier(sym) => Expr::Ident(sym),
+            _ => return Expr::Error,
         };
         self.advance();
 
@@ -1085,39 +1234,67 @@ impl<'a> Parser<'a> {
             TokenType::TokenDecrement => {
                 self.advance();
                 let right = self.parse_expression(70);
+                if right == Expr::Error {
+                    return Expr::Error;
+                }
+
                 Expr::PrefixUnary(UnaryOp::PreDecrement, Box::new(right))
             }
             TokenType::TokenIncrement => {
                 self.advance();
                 let right = self.parse_expression(70);
+                if right == Expr::Error {
+                    return Expr::Error;
+                }
+
                 Expr::PrefixUnary(UnaryOp::PreIncrement, Box::new(right))
             }
             TokenType::TokenMinus => {
                 self.advance();
                 let right = self.parse_expression(70);
+                if right == Expr::Error {
+                    return Expr::Error;
+                }
+
                 Expr::PrefixUnary(UnaryOp::Neg, Box::new(right))
             }
             TokenType::TokenBang => {
                 self.advance();
                 let right = self.parse_expression(70);
+                if right == Expr::Error {
+                    return Expr::Error;
+                }
+
                 Expr::PrefixUnary(UnaryOp::LogicalNot, Box::new(right))
             }
             TokenType::TokenTilde => {
                 self.advance();
                 let right = self.parse_expression(70);
+                if right == Expr::Error {
+                    return Expr::Error;
+                }
+
                 Expr::PrefixUnary(UnaryOp::BitwiseNot, Box::new(right))
             }
             TokenType::TokenAmpersand => {
                 self.advance();
                 let right = self.parse_expression(70);
+                if right == Expr::Error {
+                    return Expr::Error;
+                }
+
                 Expr::PrefixUnary(UnaryOp::AddressOf, Box::new(right))
             }
             TokenType::TokenAsterisk => {
                 self.advance();
                 let right = self.parse_expression(70);
+                if right == Expr::Error {
+                    return Expr::Error;
+                }
+
                 Expr::PrefixUnary(UnaryOp::Dereference, Box::new(right))
             }
-            TokenType::TokenMatch => return self.parse_match().expect("Expected match"),
+            TokenType::TokenMatch => return self.parse_match(),
             TokenType::TokenOpenBrace => {
                 self.advance(); // {
 
@@ -1131,13 +1308,17 @@ impl<'a> Parser<'a> {
                 }
 
                 if self.current_token().kind != TokenType::TokenCloseBrace {
-                    panic!("Expected '}}'"); // TODO: proper error handling
+                    self.errors.push(CompileError {
+                        message: "Expected '}'".into(),
+                        span: self.current_token().span,
+                    });
+                    return Expr::Error;
                 }
                 self.advance();
 
                 Expr::ArrayInit(elems)
             }
-            _ => self.parse_primary().expect("expected expression"), // TODO: proper error printing
+            _ => self.parse_primary(),
         };
 
         loop {
@@ -1166,11 +1347,23 @@ impl<'a> Parser<'a> {
                 }
                 self.advance(); // ?
                 let cond_after_left = self.parse_expression(0);
+                if cond_after_left == Expr::Error {
+                    return Expr::Error;
+                }
+
                 if self.current_token().kind != TokenType::TokenColon {
-                    panic!("Expected ':'") // TODO: proper error handling
+                    self.errors.push(CompileError {
+                        message: "Expected ':'".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Expr::Error;
                 }
                 self.advance();
                 let cond_after_right = self.parse_expression(0);
+                if cond_after_right == Expr::Error {
+                    return Expr::Error;
+                }
 
                 return Expr::Ternary(
                     Box::new(left),
@@ -1189,15 +1382,30 @@ impl<'a> Parser<'a> {
 
                 let mut args = vec![];
                 while self.current_token().kind != TokenType::TokenCloseParen {
-                    args.push(self.parse_expression(0));
+                    let arg = self.parse_expression(0);
+                    if arg == Expr::Error {
+                        return Expr::Error;
+                    }
+
+                    args.push(arg);
                     while self.current_token().kind == TokenType::TokenComma {
                         self.advance();
-                        args.push(self.parse_expression(0));
+
+                        let arg = self.parse_expression(0);
+                        if arg == Expr::Error {
+                            return Expr::Error;
+                        }
+                        args.push(arg);
                     }
                 }
 
                 if self.current_token().kind != TokenType::TokenCloseParen {
-                    panic!("Expected ')'"); // TODO: proper error handling
+                    self.errors.push(CompileError {
+                        message: "Expected ')'".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Expr::Error;
                 }
                 self.advance();
 
@@ -1215,7 +1423,14 @@ impl<'a> Parser<'a> {
 
                 let field = match &self.current_token().kind {
                     TokenType::TokenIdentifier(sym) => *sym,
-                    _ => panic!("Expected field name after '.'"),
+                    _ => {
+                        self.errors.push(CompileError {
+                            message: "Expected field name after '.'".into(),
+                            span: self.current_token().span,
+                        });
+                        self.synchronize();
+                        return Expr::Error;
+                    }
                 };
                 self.advance(); // identifier
                 left = Expr::FieldAccess(Box::new(left), field);
@@ -1232,13 +1447,23 @@ impl<'a> Parser<'a> {
                 self.advance();
 
                 if self.current_token().kind == TokenType::TokenCloseSquare {
-                    panic!("Empty subscript")
+                    self.errors.push(CompileError {
+                        message: "Empty subscript".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Expr::Error;
                 }
 
                 let sub = self.parse_expression(0); // inside of []
 
                 if self.current_token().kind != TokenType::TokenCloseSquare {
-                    panic!("Expected ']'"); // TODO: proper error handling
+                    self.errors.push(CompileError {
+                        message: "Expected ']'".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Expr::Error;
                 }
                 self.advance();
 
@@ -1253,11 +1478,21 @@ impl<'a> Parser<'a> {
                 self.advance(); // :
 
                 if self.current_token().kind != TokenType::TokenColon {
-                    panic!("Expected ':'"); // TODO: proper error handling
+                    self.errors.push(CompileError {
+                        message: "Expected ':'".into(),
+                        span: self.current_token().span,
+                    });
+                    self.synchronize();
+                    return Expr::Error;
                 }
                 self.advance(); // :
 
                 let pattern = self.parse_pattern();
+                if pattern.is_none() {
+                    self.synchronize();
+                    return Expr::Error;
+                }
+                let pattern = pattern.unwrap();
 
                 left = Expr::Variant(Box::new(left), pattern);
 
@@ -1289,6 +1524,9 @@ impl<'a> Parser<'a> {
             // RA: 1 - (2 - 3) = 2 This is false
             // LA: (1 - 2) - 3 = -4 This is true
             let right = self.parse_expression(bp + if right_assoc { 0 } else { 1 });
+            if right == Expr::Error {
+                return Expr::Error;
+            }
 
             left = Expr::Binary(Box::new(left), op, Box::new(right))
         }
@@ -2225,14 +2463,18 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Empty subscript")]
     fn test_array_sub_empty_expression() {
         let mut interner = Interner::new();
-        let input = "bar = foo[]";
+        let input = "bar = foo[];";
         let mut lexer = Lexer::init_lexer(input, &mut interner);
         let mut parser = Parser::init_parser(&mut lexer);
 
-        let _ast = parser.parse_expression(0);
+        let ast = parser.parse_expression(0);
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Expr::Error);
+        assert_eq!(err, "Empty subscript".into());
     }
 
     // DECLARATION
@@ -2921,6 +3163,21 @@ mod test {
         ));
 
         assert_eq!(ast, expected_statement);
+    }
+
+    #[test]
+    fn test_variant_initialization_ok_missing_value() {
+        let mut interner = Interner::new();
+        let input = "foo = Ok();";
+        let mut lexer = Lexer::init_lexer(input, &mut interner);
+        let mut parser = Parser::init_parser(&mut lexer);
+
+        let ast = parser.parse_statement();
+
+        let err = parser.errors.first().unwrap().message.clone();
+
+        assert_eq!(ast, Statement::Expr(Expr::Error));
+        assert_eq!(err, "Expected a value".into());
     }
 
     #[test]
