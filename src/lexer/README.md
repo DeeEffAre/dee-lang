@@ -6,27 +6,27 @@ Lexer is a compiler frontend component which translates source code into tokens 
 
 ### Keywords (Dee-lang keywords + C keywords)
 
-- `break`, `const`, `continue`, `default`, `do`, `else`, `extern`, `for`, `goto`, `if`, `return`, `sizeof`, `static`, `struct`, `typedef`, `while`, `func`, `match`, `self`, `defer`, `void`
+`break`, `const`, `continue`, `default`, `do`, `else`, `extern`, `for`, `goto`, `if`, `return`, `sizeof`, `static`, `struct`, `typedef`, `while`, `func`, `match`, `self`, `defer`, `void`
 
 ### Types
 
-- `i64`, `i32`, `i16`, `i8`, `u64`, `u32`, `u16`, `u8`, `f64`, `f32`, `usize`, `string`, `Hashmap`, `Arr`, `Variant`, `Maybe`, `Result`, `Some`, `Ok`, `None`, `Err`, `boolean`, `char`
+`i64`, `i32`, `i16`, `i8`, `u64`, `u32`, `u16`, `u8`, `f64`, `f32`, `usize`, `string`, `Hashmap`, `Arr`, `Variant`, `Maybe`, `Result`, `Some`, `Ok`, `None`, `Err`, `boolean`, `char`
 
 ### Operators
 
-- `+`, `-`, `*`, `/`, `!`, `|`, `>`, `<`, `.`, `&`, `=`, `^`, `~`, `?`, `%`, `==`, `!=`, `>=`, `<=`, `->`, `&&`, `||`, `>>`, `<<`, `--`, `++`, `-=`, `+=`, `*=`, `/=`, `&=`, `|=`, `^=`, `%=`
+`+`, `-`, `*`, `/`, `!`, `|`, `>`, `<`, `.`, `&`, `=`, `^`, `~`, `?`, `%`, `==`, `!=`, `>=`, `<=`, `->`, `&&`, `||`, `>>`, `<<`, `--`, `++`, `-=`, `+=`, `*=`, `/=`, `&=`, `|=`, `^=`, `%=`
 
 ### Delimiters/Punctuations
 
-- `(`, `)`, `[`, `]`, `{`, `}`, `:`, `;`, 
+`(`, `)`, `[`, `]`, `{`, `}`, `:`, `;`, 
 
 ### Literals
 
-- `TokenIntConstant`, `TokenUIntConstant`, `TokenFloatConstant`, `TokenStringConstant`, `TokenIdentifier`
+`TokenIntConstant`, `TokenUIntConstant`, `TokenFloatConstant`, `TokenStringConstant`, `TokenIdentifier`
 
 ### Special Tokens
 
-- EOF, Error, Underscore
+EOF, Error, Underscore
 
 ## How Does It Work?
 
